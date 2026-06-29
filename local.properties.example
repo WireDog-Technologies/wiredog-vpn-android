@@ -1,0 +1,11 @@
+## local.properties — copy this file to local.properties and fill in your values.
+## local.properties is git-ignored and must never be committed.
+
+# Android SDK location (set automatically by Android Studio)
+sdk.dir=/path/to/Android/Sdk
+
+# Release signing credentials
+# These must match the keystore file referenced in app/build.gradle.kts
+keystore.password=YOUR_KEYSTORE_PASSWORD
+key.alias=YOUR_KEY_ALIAS
+key.password=YOUR_KEY_PASSWORD

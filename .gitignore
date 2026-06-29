@@ -1,0 +1,56 @@
+# Android Studio
+*.iml
+.gradle
+.idea/
+*.jks
+*.keystore
+
+# Build outputs
+/build/
+/app/build/
+*.apk
+*.aab
+*.ap_
+
+# Local configuration files
+local.properties
+
+# Gradle cache
+.gradle/
+
+# Captures and native builds
+/captures/
+.externalNativeBuild/
+.cxx/
+
+# OS-specific files
+.DS_Store
+.DS_Store?
+*.swp
+*.swo
+*~
+Thumbs.db
+
+# Kotlin
+*.kt.bak
+.kotlin/
+
+# IntelliJ/Android Studio misc
+*.iws
+*.ipr
+*.sublime-workspace
+
+# Firebase
+google-services.json
+
+# Secrets and local config
+keystore.properties
+signing.properties
+.env
+.env.local
+
+docs/
+tasks/
+.claude/
+CLAUDE.md
+nul
