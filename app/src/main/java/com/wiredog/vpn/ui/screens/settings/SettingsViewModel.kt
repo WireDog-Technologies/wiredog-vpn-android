@@ -25,6 +25,8 @@ data class SettingsUiState(
     val protocol: String = "AmneziaWG",
     val autoConnectEnabled: Boolean = false,
     val ipv6Enabled: Boolean = false,
+    val blockAdsEnabled: Boolean = true,
+    val blockMalwareEnabled: Boolean = true,
     val splitTunnelingSummary: String = "Off"
 )
 
@@ -75,6 +77,16 @@ class SettingsViewModel @Inject constructor(
             }
         }
         viewModelScope.launch {
+            settingsPreferences.blockAdsEnabled.collect { enabled ->
+                _uiState.value = _uiState.value.copy(blockAdsEnabled = enabled)
+            }
+        }
+        viewModelScope.launch {
+            settingsPreferences.blockMalwareEnabled.collect { enabled ->
+                _uiState.value = _uiState.value.copy(blockMalwareEnabled = enabled)
+            }
+        }
+        viewModelScope.launch {
             combine(
                 settingsPreferences.splitTunnelingEnabled,
                 settingsPreferences.splitTunnelingMode,
@@ -109,5 +121,27 @@ class SettingsViewModel @Inject constructor(
                 _showReconnectWarning.emit(Unit)
             }
         }
+    }
+
+    fun setBlockAdsEnabled(enabled: Boolean) {
+        viewModelScope.launch {
+            settingsPreferences.setBlockAdsEnabled(enabled)
+            if (vpnConnectionManager.connectionState.value == ConnectionState.CONNECTED) {
+                _showReconnectWarning.emit(Unit)
+            }
+        }
+    }
+
+    fun setBlockMalwareEnabled(enabled: Boolean) {
+        viewModelScope.launch {
+            settingsPreferences.setBlockMalwareEnabled(enabled)
+            if (vpnConnectionManager.connectionState.value == ConnectionState.CONNECTED) {
+                _showReconnectWarning.emit(Unit)
+            }
+        }
+    }
+
+    fun reconnectNow() {
+        vpnConnectionManager.reconnect()
     }
 }

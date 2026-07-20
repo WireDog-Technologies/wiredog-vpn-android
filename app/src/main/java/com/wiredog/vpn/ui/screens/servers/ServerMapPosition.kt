@@ -22,7 +22,9 @@ object ServerMapPosition {
         "Columbus" to Position(1515f, 500f),
         "Dallas" to Position(1050f, 850f),
         "Denver" to Position(775f, 535f),
+        "Honolulu" to Position(670f, 1058f),
         "Las Vegas" to Position(440f, 635f),
+        "Los Angeles" to Position(315f, 720f),
         "Miami" to Position(1707f, 1095f),
         "Nashville" to Position(1390f, 690f),
         "Newark" to Position(1776f, 420f),
@@ -33,6 +35,8 @@ object ServerMapPosition {
         "Richmond" to Position(1715f, 580f),
         "Salt Lake City" to Position(575f, 455f),
         "San Francisco" to Position(210f, 510f),
+        "San Jose" to Position(210f, 510f),
+        "Silicon Valley" to Position(210f, 510f),
         "Seattle" to Position(330f, 96f),
     )
 

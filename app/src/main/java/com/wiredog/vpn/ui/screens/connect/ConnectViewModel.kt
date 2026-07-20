@@ -37,7 +37,8 @@ data class ConnectUiState(
     val vpnPermissionIntent: Intent? = null,
     val splitTunnelingEnabled: Boolean = false,
     val needsSubscription: Boolean = false,
-    val pendingServer: Server? = null
+    val pendingServer: Server? = null,
+    val showReviewPrompt: Boolean = false
 )
 
 @HiltViewModel
@@ -70,6 +71,8 @@ class ConnectViewModel @Inject constructor(
         }
         fetchIpThenGeoLocation()
         observeConnectionState()
+        observeConnectionError()
+        observeReviewPrompt()
         observeConnectionStartTime()
         observeSplitTunneling()
         restoreLastServer()
@@ -133,6 +136,36 @@ class ConnectViewModel @Inject constructor(
                 }
             }
         }
+    }
+
+    private fun observeConnectionError() {
+        viewModelScope.launch {
+            vpnConnectionManager.connectionError.collect { message ->
+                if (message != null) {
+                    _uiState.update { it.copy(error = message) }
+                    vpnConnectionManager.clearConnectionError()
+                }
+            }
+        }
+    }
+
+    private fun observeReviewPrompt() {
+        viewModelScope.launch {
+            vpnConnectionManager.showReviewPrompt.collect { show ->
+                if (show) {
+                    _uiState.update { it.copy(showReviewPrompt = true) }
+                    vpnConnectionManager.acknowledgeReviewPrompt()
+                }
+            }
+        }
+    }
+
+    fun dismissReviewPrompt() {
+        _uiState.update { it.copy(showReviewPrompt = false) }
+    }
+
+    fun recordReviewPromptPositive() {
+        vpnConnectionManager.recordReviewPromptPositiveResponse()
     }
 
     private fun observeConnectionStartTime() {

@@ -5,6 +5,8 @@ import com.wiredog.vpn.data.remote.api.WireDogApi
 import com.wiredog.vpn.data.remote.api.dto.ConnectRequest
 import com.wiredog.vpn.data.remote.api.dto.ConnectResponse
 import com.wiredog.vpn.data.remote.api.dto.DisconnectRequest
+import com.wiredog.vpn.domain.model.VpnConnectException
+import retrofit2.HttpException
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -15,14 +17,28 @@ class VpnRepository @Inject constructor(
 ) {
     private var currentSessionId: String? = null
 
-    suspend fun connect(serverId: String): Result<ConnectResponse> {
+    suspend fun connect(
+        serverId: String,
+        blockAds: Boolean = true,
+        blockMalware: Boolean = true
+    ): Result<ConnectResponse> {
         return try {
-            val response = api.vpnConnect(ConnectRequest(serverId))
+            val response = api.vpnConnect(ConnectRequest(serverId, blockAds, blockMalware))
             currentSessionId = response.sessionId
             secureStorage.saveSessionId(response.sessionId)
             Result.success(response)
+        } catch (e: HttpException) {
+            Result.failure(mapConnectError(e))
         } catch (e: Exception) {
             Result.failure(e)
+        }
+    }
+
+    private fun mapConnectError(e: HttpException): Exception {
+        return if (e.code() == 429) {
+            VpnConnectException("You've reached your 5-device connection limit. Disconnect another device to continue.")
+        } else {
+            e
         }
     }
 

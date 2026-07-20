@@ -38,6 +38,14 @@ data class ChangeLogEntry(
 
 private val changeLog = listOf(
     ChangeLogEntry(
+        version = "1.1.0",
+        date = "July 2026",
+        changes = listOf(
+            "Togglable DNS filters — Block Ads and Block Malware can now be switched on or off independently in Settings.",
+            "Clearer error handling and messaging — Connection issues now show specific, actionable messages instead of generic failures."
+        )
+    ),
+    ChangeLogEntry(
         version = "1.0.5",
         date = "June 2026",
         changes = listOf(

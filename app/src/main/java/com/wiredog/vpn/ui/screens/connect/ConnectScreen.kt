@@ -40,6 +40,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -62,6 +63,7 @@ import com.wiredog.vpn.ui.theme.VpnPrimary
 import com.wiredog.vpn.ui.theme.VpnRed
 import com.wiredog.vpn.ui.theme.VpnTextPrimary
 import com.wiredog.vpn.ui.theme.VpnTextSecondary
+import com.google.android.play.core.review.ReviewManagerFactory
 import kotlinx.coroutines.delay
 
 @Composable
@@ -250,6 +252,30 @@ fun ConnectScreen(
                 navController.navigate(Screen.Subscription.route)
                 viewModel.closeSubscriptionSheet()
             }
+        }
+
+        if (uiState.showReviewPrompt) {
+            val context = LocalContext.current
+            ReviewPromptSheet(
+                onPositive = {
+                    viewModel.recordReviewPromptPositive()
+                    viewModel.dismissReviewPrompt()
+                    val activity = context as? Activity
+                    if (activity != null) {
+                        val reviewManager = ReviewManagerFactory.create(context)
+                        reviewManager.requestReviewFlow().addOnCompleteListener { request ->
+                            if (request.isSuccessful) {
+                                reviewManager.launchReviewFlow(activity, request.result)
+                            }
+                        }
+                    }
+                },
+                onNegative = {
+                    viewModel.dismissReviewPrompt()
+                    navController.navigate(Screen.ReportIssue.route)
+                },
+                onDismiss = { viewModel.dismissReviewPrompt() }
+            )
         }
     }
 }

@@ -19,28 +19,31 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Block
 import androidx.compose.material.icons.filled.Bolt
 import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.Description
 import androidx.compose.material.icons.filled.Language
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.Public
+import androidx.compose.material.icons.filled.Security
 import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.filled.Shield
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Scaffold
-import androidx.compose.material3.Snackbar
-import androidx.compose.material3.SnackbarHost
-import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -77,25 +80,40 @@ fun SettingsScreen(
     val uiState by viewModel.uiState.collectAsState()
     val currentUser by viewModel.currentUser.collectAsState()
     val context = LocalContext.current
-    val snackbarHostState = remember { SnackbarHostState() }
+    var showReconnectDialog by remember { mutableStateOf(false) }
 
     LaunchedEffect(Unit) {
         viewModel.showReconnectWarning.collect {
-            snackbarHostState.showSnackbar("Reconnect for changes to take effect")
+            showReconnectDialog = true
         }
     }
 
+    if (showReconnectDialog) {
+        AlertDialog(
+            onDismissRequest = { showReconnectDialog = false },
+            title = { Text("Reconnect Required", color = VpnTextPrimary) },
+            text = { Text("Reconnect for changes to take effect.", color = VpnTextSecondary) },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        showReconnectDialog = false
+                        viewModel.reconnectNow()
+                    }
+                ) {
+                    Text("Reconnect Now", color = VpnPrimary)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showReconnectDialog = false }) {
+                    Text("Later", color = VpnTextSecondary)
+                }
+            },
+            containerColor = VpnCardBackground
+        )
+    }
+
     Scaffold(
-        containerColor = VpnBackground,
-        snackbarHost = {
-            SnackbarHost(snackbarHostState) { data ->
-                Snackbar(
-                    snackbarData = data,
-                    containerColor = VpnCardBackground,
-                    contentColor = VpnTextPrimary
-                )
-            }
-        }
+        containerColor = VpnBackground
     ) { _ ->
     Column(
         modifier = modifier
@@ -236,6 +254,28 @@ fun SettingsScreen(
                 description = "Configure IPv6 and leak protection",
                 checked = uiState.ipv6Enabled,
                 onCheckedChange = { viewModel.setIpv6Enabled(it) }
+            )
+
+            SettingsDivider()
+
+            SettingsToggleRow(
+                icon = Icons.Default.Block,
+                iconTint = VpnPrimary,
+                title = "Block Ads",
+                description = "Block ad and tracker domains",
+                checked = uiState.blockAdsEnabled,
+                onCheckedChange = { viewModel.setBlockAdsEnabled(it) }
+            )
+
+            SettingsDivider()
+
+            SettingsToggleRow(
+                icon = Icons.Default.Security,
+                iconTint = VpnPrimary,
+                title = "Block Malware",
+                description = "Block known malware and phishing domains",
+                checked = uiState.blockMalwareEnabled,
+                onCheckedChange = { viewModel.setBlockMalwareEnabled(it) }
             )
         }
 

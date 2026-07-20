@@ -5,6 +5,7 @@ import android.content.Intent
 import android.util.Log
 import com.wiredog.vpn.BuildConfig
 import com.wiredog.vpn.data.config.Config
+import com.wiredog.vpn.data.local.preferences.ReviewPromptPreferences
 import com.wiredog.vpn.data.local.preferences.SettingsPreferences
 import com.wiredog.vpn.data.logging.LogLevel
 import com.wiredog.vpn.data.logging.LogService
@@ -14,6 +15,7 @@ import com.wiredog.vpn.domain.model.ConnectionState
 import com.wiredog.vpn.domain.model.ConnectionStats
 import com.wiredog.vpn.domain.model.Server
 import com.wiredog.vpn.domain.model.SplitTunnelingSettings
+import com.wiredog.vpn.domain.model.VpnConnectException
 import org.amnezia.awg.backend.GoBackend
 import org.amnezia.awg.backend.Tunnel
 import dagger.hilt.android.qualifiers.ApplicationContext
@@ -38,6 +40,7 @@ class VpnConnectionManager @Inject constructor(
     private val vpnRepository: VpnRepository,
     private val serverRepository: ServerRepository,
     private val settingsPreferences: SettingsPreferences,
+    private val reviewPromptPreferences: ReviewPromptPreferences,
     private val logService: LogService
 ) {
     companion object {
@@ -85,6 +88,13 @@ class VpnConnectionManager @Inject constructor(
     private val _vpnIp = MutableStateFlow<String?>(null)
     val vpnIp: StateFlow<String?> = _vpnIp.asStateFlow()
 
+    private val _connectionError = MutableStateFlow<String?>(null)
+    val connectionError: StateFlow<String?> = _connectionError.asStateFlow()
+
+    private val _showReviewPrompt = MutableStateFlow(false)
+    val showReviewPrompt: StateFlow<Boolean> = _showReviewPrompt.asStateFlow()
+    private var hasRecordedReviewPromptForCurrentConnection = false
+
     private var statsJob: Job? = null
     private var previousRxBytes: Long = 0
     private var previousTxBytes: Long = 0
@@ -100,6 +110,26 @@ class VpnConnectionManager @Inject constructor(
         return GoBackend.VpnService.prepare(context)
     }
 
+    fun clearConnectionError() {
+        _connectionError.value = null
+    }
+
+    fun acknowledgeReviewPrompt() {
+        _showReviewPrompt.value = false
+    }
+
+    fun recordReviewPromptPositiveResponse() {
+        scope.launch { reviewPromptPreferences.recordPositiveResponse() }
+    }
+
+    private suspend fun maybeShowReviewPrompt() {
+        if (hasRecordedReviewPromptForCurrentConnection) return
+        hasRecordedReviewPromptForCurrentConnection = true
+        if (reviewPromptPreferences.recordSuccessfulConnection()) {
+            _showReviewPrompt.value = true
+        }
+    }
+
     fun connect(server: Server) {
         if (_connectionState.value == ConnectionState.CONNECTING ||
             _connectionState.value == ConnectionState.CONNECTED) {
@@ -108,24 +138,30 @@ class VpnConnectionManager @Inject constructor(
 
         isUserDisconnect = false
         currentServer = server
+        _connectionError.value = null
+        hasRecordedReviewPromptForCurrentConnection = false
 
         scope.launch {
             _connectionState.value = ConnectionState.CONNECTING
             logService.logService("Connection attempt to ${server.displayName}")
 
             try {
-                // 1. Call API to get WireGuard config
-                val result = vpnRepository.connect(server.id)
+                // 1. Read settings
+                val ipv6Enabled = settingsPreferences.ipv6Enabled.first()
+                val blockAds = settingsPreferences.blockAdsEnabled.first()
+                val blockMalware = settingsPreferences.blockMalwareEnabled.first()
+                val splitTunneling = readSplitTunnelingSettings()
+
+                // 2. Call API to get WireGuard config
+                val result = vpnRepository.connect(server.id, blockAds, blockMalware)
                 val response = result.getOrElse { e ->
                     if (BuildConfig.DEBUG) Log.e(TAG, "API connect failed", e)
                     logService.logService("Connection failed: API error", LogLevel.ERROR)
                     _connectionState.value = ConnectionState.DISCONNECTED
+                    _connectionError.value = (e as? VpnConnectException)?.message
+                        ?: "Unable to connect. Please try again."
                     return@launch
                 }
-
-                // 2. Read settings
-                val ipv6Enabled = settingsPreferences.ipv6Enabled.first()
-                val splitTunneling = readSplitTunnelingSettings()
 
                 // 3. Build WireGuard Config from API response
                 val config = TunnelConfigBuilder.build(response.config, ipv6Enabled, splitTunneling)
@@ -135,9 +171,10 @@ class VpnConnectionManager @Inject constructor(
                     backend.setState(tunnel, Tunnel.State.UP, config)
                 }
 
-                // 5. Resolve endpoint IP for display
-                val endpointHost = response.config.peer.endpoint.substringBefore(":")
-                _vpnIp.value = try {
+                // 5. Use backend-assigned exit IP for display; fall back to resolving the
+                // peer endpoint only if the backend didn't return one.
+                _vpnIp.value = response.server?.exitIp ?: try {
+                    val endpointHost = response.config.peer.endpoint.substringBefore(":")
                     withContext(Dispatchers.IO) {
                         java.net.InetAddress.getByName(endpointHost).hostAddress
                     }
@@ -155,6 +192,8 @@ class VpnConnectionManager @Inject constructor(
 
                 // 8. Start stats polling
                 startStatsPolling()
+
+                maybeShowReviewPrompt()
 
                 if (BuildConfig.DEBUG) Log.i(TAG, "Connected to ${server.displayName}")
                 logService.logService("Connected to ${server.displayName}")
@@ -207,6 +246,7 @@ class VpnConnectionManager @Inject constructor(
                 _vpnIp.value = null
                 _statistics.value = ConnectionStats()
                 currentServer = null
+                hasRecordedReviewPromptForCurrentConnection = false
             }
         }
     }
@@ -238,7 +278,12 @@ class VpnConnectionManager @Inject constructor(
                 logService.logService("Reconnect attempt $attempt", LogLevel.INFO)
 
                 try {
-                    val result = vpnRepository.connect(server.id)
+                    val ipv6Enabled = settingsPreferences.ipv6Enabled.first()
+                    val blockAds = settingsPreferences.blockAdsEnabled.first()
+                    val blockMalware = settingsPreferences.blockMalwareEnabled.first()
+                    val splitTunneling = readSplitTunnelingSettings()
+
+                    val result = vpnRepository.connect(server.id, blockAds, blockMalware)
                     val response = result.getOrElse { e ->
                         if (BuildConfig.DEBUG) Log.w(TAG, "Reconnect API failed", e)
                         logService.logService("Reconnect attempt $attempt failed: API error", LogLevel.WARNING)
@@ -248,17 +293,15 @@ class VpnConnectionManager @Inject constructor(
                         return@launch // Don't retry API failures indefinitely
                     }
 
-                    val ipv6Enabled = settingsPreferences.ipv6Enabled.first()
-                    val splitTunneling = readSplitTunnelingSettings()
                     val config = TunnelConfigBuilder.build(response.config, ipv6Enabled, splitTunneling)
 
                     withContext(Dispatchers.IO) {
                         backend.setState(tunnel, Tunnel.State.UP, config)
                     }
 
-                    // Resolve endpoint IP
-                    val endpointHost = response.config.peer.endpoint.substringBefore(":")
-                    _vpnIp.value = try {
+                    // Use backend-assigned exit IP; fall back to resolving the peer endpoint.
+                    _vpnIp.value = response.server?.exitIp ?: try {
+                        val endpointHost = response.config.peer.endpoint.substringBefore(":")
                         withContext(Dispatchers.IO) {
                             java.net.InetAddress.getByName(endpointHost).hostAddress
                         }
@@ -271,6 +314,7 @@ class VpnConnectionManager @Inject constructor(
                     previousTxBytes = 0
                     consecutiveStatsFailures = 0
                     startStatsPolling()
+                    maybeShowReviewPrompt()
                     if (BuildConfig.DEBUG) Log.i(TAG, "Reconnected successfully")
                     logService.logService("Reconnected successfully after attempt $attempt")
                     return@launch

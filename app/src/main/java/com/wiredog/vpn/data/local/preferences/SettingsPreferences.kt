@@ -24,6 +24,8 @@ class SettingsPreferences @Inject constructor(
         val PROTOCOL = stringPreferencesKey("protocol")
         val AUTO_CONNECT_ENABLED = booleanPreferencesKey("auto_connect_enabled")
         val IPV6_ENABLED = booleanPreferencesKey("ipv6_enabled")
+        val BLOCK_ADS_ENABLED = booleanPreferencesKey("block_ads_enabled")
+        val BLOCK_MALWARE_ENABLED = booleanPreferencesKey("block_malware_enabled")
         val SPLIT_TUNNELING_ENABLED = booleanPreferencesKey("split_tunneling_enabled")
         val SPLIT_TUNNELING_MODE = stringPreferencesKey("split_tunneling_mode")
         val SPLIT_TUNNELING_APPS = stringSetPreferencesKey("split_tunneling_apps")
@@ -60,6 +62,28 @@ class SettingsPreferences @Inject constructor(
     suspend fun setIpv6Enabled(enabled: Boolean) {
         context.settingsDataStore.edit { prefs ->
             prefs[Keys.IPV6_ENABLED] = enabled
+        }
+    }
+
+    // Block Ads (DNS filter)
+    val blockAdsEnabled: Flow<Boolean> = context.settingsDataStore.data.map { prefs ->
+        prefs[Keys.BLOCK_ADS_ENABLED] ?: true
+    }
+
+    suspend fun setBlockAdsEnabled(enabled: Boolean) {
+        context.settingsDataStore.edit { prefs ->
+            prefs[Keys.BLOCK_ADS_ENABLED] = enabled
+        }
+    }
+
+    // Block Malware (DNS filter)
+    val blockMalwareEnabled: Flow<Boolean> = context.settingsDataStore.data.map { prefs ->
+        prefs[Keys.BLOCK_MALWARE_ENABLED] ?: true
+    }
+
+    suspend fun setBlockMalwareEnabled(enabled: Boolean) {
+        context.settingsDataStore.edit { prefs ->
+            prefs[Keys.BLOCK_MALWARE_ENABLED] = enabled
         }
     }
 

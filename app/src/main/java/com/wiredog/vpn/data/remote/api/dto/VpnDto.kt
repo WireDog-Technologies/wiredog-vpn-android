@@ -5,7 +5,9 @@ import com.squareup.moshi.JsonClass
 
 @JsonClass(generateAdapter = true)
 data class ConnectRequest(
-    @Json(name = "serverId") val serverId: String
+    @Json(name = "serverId") val serverId: String,
+    @Json(name = "blockAds") val blockAds: Boolean = true,
+    @Json(name = "blockMalware") val blockMalware: Boolean = true
 )
 
 @JsonClass(generateAdapter = true)
@@ -49,7 +51,10 @@ data class PeerConfigDto(
 data class ConnectServerInfo(
     @Json(name = "id") val id: String,
     @Json(name = "state") val state: String? = null,
-    @Json(name = "city") val city: String? = null
+    @Json(name = "city") val city: String? = null,
+    @Json(name = "stateCode") val stateCode: String? = null,
+    @Json(name = "ipAddress") val ipAddress: String? = null,
+    @Json(name = "exitIp") val exitIp: String? = null
 )
 
 @JsonClass(generateAdapter = true)

@@ -51,6 +51,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
+import com.wiredog.vpn.domain.model.ConnectionState
 import com.wiredog.vpn.ui.theme.VpnCardBackground
 import com.wiredog.vpn.ui.theme.VpnDividerColor
 import com.wiredog.vpn.ui.theme.VpnGreen
@@ -70,9 +71,12 @@ fun ProfileScreen(
 ) {
     val uiState by viewModel.uiState.collectAsState()
     val currentUser by viewModel.currentUser.collectAsState()
+    val connectionState by viewModel.connectionState.collectAsState()
     val context = LocalContext.current
     var showSignOutDialog by remember { mutableStateOf(false) }
+    var showSignOutBlockedDialog by remember { mutableStateOf(false) }
     var showDeleteDialog by remember { mutableStateOf(false) }
+    var showDeleteBlockedDialog by remember { mutableStateOf(false) }
     var showDeleteConfirmDialog by remember { mutableStateOf(false) }
     var deleteError by remember { mutableStateOf<String?>(null) }
 
@@ -135,6 +139,34 @@ fun ProfileScreen(
             dismissButton = {
                 TextButton(onClick = { showDeleteConfirmDialog = false }) {
                     Text("Cancel", color = VpnPrimary)
+                }
+            },
+            containerColor = VpnCardBackground
+        )
+    }
+
+    if (showSignOutBlockedDialog) {
+        AlertDialog(
+            onDismissRequest = { showSignOutBlockedDialog = false },
+            title = { Text("Disconnect Required", color = VpnTextPrimary) },
+            text = { Text("Please disconnect the VPN before signing out.", color = VpnTextSecondary) },
+            confirmButton = {
+                TextButton(onClick = { showSignOutBlockedDialog = false }) {
+                    Text("OK", color = VpnPrimary)
+                }
+            },
+            containerColor = VpnCardBackground
+        )
+    }
+
+    if (showDeleteBlockedDialog) {
+        AlertDialog(
+            onDismissRequest = { showDeleteBlockedDialog = false },
+            title = { Text("Disconnect Required", color = VpnTextPrimary) },
+            text = { Text("Please disconnect the VPN before deleting your account.", color = VpnTextSecondary) },
+            confirmButton = {
+                TextButton(onClick = { showDeleteBlockedDialog = false }) {
+                    Text("OK", color = VpnPrimary)
                 }
             },
             containerColor = VpnCardBackground
@@ -274,7 +306,13 @@ fun ProfileScreen(
             Spacer(modifier = Modifier.height(12.dp))
 
             OutlinedButton(
-                onClick = { showSignOutDialog = true },
+                onClick = {
+                    if (connectionState == ConnectionState.DISCONNECTED) {
+                        showSignOutDialog = true
+                    } else {
+                        showSignOutBlockedDialog = true
+                    }
+                },
                 modifier = Modifier
                     .fillMaxWidth()
                     .height(50.dp),
@@ -310,7 +348,13 @@ fun ProfileScreen(
             Spacer(modifier = Modifier.height(12.dp))
 
             OutlinedButton(
-                onClick = { showDeleteDialog = true },
+                onClick = {
+                    if (connectionState == ConnectionState.DISCONNECTED) {
+                        showDeleteDialog = true
+                    } else {
+                        showDeleteBlockedDialog = true
+                    }
+                },
                 modifier = Modifier
                     .fillMaxWidth()
                     .height(50.dp),

@@ -5,7 +5,9 @@ import androidx.lifecycle.viewModelScope
 import com.wiredog.vpn.BuildConfig
 import com.wiredog.vpn.data.repository.AppConfigRepository
 import com.wiredog.vpn.data.repository.AuthRepository
+import com.wiredog.vpn.domain.model.ConnectionState
 import com.wiredog.vpn.domain.model.User
+import com.wiredog.vpn.service.vpn.VpnConnectionManager
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -27,7 +29,8 @@ data class ProfileUiState(
 @HiltViewModel
 class ProfileViewModel @Inject constructor(
     private val authRepository: AuthRepository,
-    private val appConfigRepository: AppConfigRepository
+    private val appConfigRepository: AppConfigRepository,
+    private val vpnConnectionManager: VpnConnectionManager
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(ProfileUiState())
@@ -35,6 +38,8 @@ class ProfileViewModel @Inject constructor(
 
     val currentUser: StateFlow<User?> = authRepository.currentUser
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), null)
+
+    val connectionState: StateFlow<ConnectionState> = vpnConnectionManager.connectionState
 
     val appVersionCode: Int = BuildConfig.VERSION_CODE
     val appVersionName: String = BuildConfig.VERSION_NAME

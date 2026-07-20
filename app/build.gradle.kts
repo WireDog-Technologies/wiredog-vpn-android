@@ -36,8 +36,8 @@ android {
         applicationId = "com.wiredog.vpn"
         minSdk = 28
         targetSdk = 36
-        versionCode = 7
-        versionName = "1.0.5"
+        versionCode = 8
+        versionName = "1.1.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
@@ -50,6 +50,12 @@ android {
     }
 
     buildTypes {
+        debug {
+            // Android Studio's Run button always builds the debug variant, so running
+            // from the IDE hits the integration backend automatically. Release builds
+            // (APK/bundle) use the production URL from defaultConfig instead.
+            buildConfigField("String", "WIREDOG_API_BASE_URL", "\"https://wiredog-backend-dev.onrender.com/api\"")
+        }
         release {
             signingConfig = signingConfigs.getByName("release")
             isMinifyEnabled = true
@@ -143,6 +149,9 @@ dependencies {
 
     // Coroutines
     implementation(libs.coroutines.android)
+
+    // Play In-App Review
+    implementation(libs.play.review.ktx)
 
     // Desugaring (required by WireGuard tunnel library)
     coreLibraryDesugaring(libs.desugar)
