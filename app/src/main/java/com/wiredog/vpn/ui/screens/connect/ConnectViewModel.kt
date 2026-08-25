@@ -32,6 +32,8 @@ data class ConnectUiState(
     val realPublicIp: String? = null,
     val location: String? = null,
     val isLoadingIp: Boolean = false,
+    val isReconnecting: Boolean = false,
+    val isSwitchingServer: Boolean = false,
     val connectionStartTime: Long? = null,
     val error: String? = null,
     val vpnPermissionIntent: Intent? = null,
@@ -40,6 +42,15 @@ data class ConnectUiState(
     val pendingServer: Server? = null,
     val showReviewPrompt: Boolean = false
 )
+
+/**
+ * True while a connect/disconnect/reconnect/server-switch is in flight — the UI should show
+ * "Loading..." for IP/location instead of a stale value from before the transition.
+ */
+val ConnectUiState.isTransitioning: Boolean
+    get() = isSwitchingServer || isReconnecting || isLoadingIp ||
+        connectionState == ConnectionState.CONNECTING ||
+        connectionState == ConnectionState.DISCONNECTING
 
 @HiltViewModel
 class ConnectViewModel @Inject constructor(
@@ -74,6 +85,8 @@ class ConnectViewModel @Inject constructor(
         observeConnectionError()
         observeReviewPrompt()
         observeConnectionStartTime()
+        observeReconnecting()
+        observeSwitchingServer()
         observeSplitTunneling()
         restoreLastServer()
         startLatencyPolling()
@@ -124,13 +137,16 @@ class ConnectViewModel @Inject constructor(
                 }
 
                 if (state == ConnectionState.DISCONNECTED &&
-                    (previousState == ConnectionState.CONNECTED || previousState == ConnectionState.DISCONNECTING)) {
-                    _uiState.update {
-                        it.copy(
-                            publicIp = ipService.cachedPublicIp ?: it.publicIp,
-                            location = ipService.cachedLocation
-                        )
-                    }
+                    (previousState == ConnectionState.CONNECTED || previousState == ConnectionState.DISCONNECTING) &&
+                    !vpnConnectionManager.isSwitchingServer.value) {
+                    // Deliberately do NOT show cached IP/location here — isSwitchingServer
+                    // already covers the "in progress" display during a live server switch, and
+                    // writing a stale cached value here (even briefly, before isLoadingIp flips
+                    // true) is exactly what caused a wrong-data flash on plain disconnects too.
+                    // isLoadingIp masks the stale underlying fields via isTransitioning until
+                    // fetchIpWithRetryThenGeoLocation() below has fully resolved both IP and
+                    // location.
+                    _uiState.update { it.copy(isLoadingIp = true) }
                     delay(500)
                     fetchIpWithRetryThenGeoLocation()
                 }
@@ -176,6 +192,22 @@ class ConnectViewModel @Inject constructor(
         }
     }
 
+    private fun observeReconnecting() {
+        viewModelScope.launch {
+            vpnConnectionManager.isReconnecting.collect { reconnecting ->
+                _uiState.update { it.copy(isReconnecting = reconnecting) }
+            }
+        }
+    }
+
+    private fun observeSwitchingServer() {
+        viewModelScope.launch {
+            vpnConnectionManager.isSwitchingServer.collect { switching ->
+                _uiState.update { it.copy(isSwitchingServer = switching) }
+            }
+        }
+    }
+
     private fun observeSplitTunneling() {
         viewModelScope.launch {
             settingsPreferences.splitTunnelingEnabled.collect { enabled ->
@@ -191,44 +223,58 @@ class ConnectViewModel @Inject constructor(
                 val ipv4 = async { ipService.getPublicIp() }
                 val ipv6 = async { ipService.getPublicIpv6() }
                 ipv4.await()
-                    .onSuccess { ip -> _uiState.update { it.copy(publicIp = ip, realPublicIp = ip, isLoadingIp = false) } }
-                    .onFailure { _uiState.update { it.copy(isLoadingIp = false) } }
+                    .onSuccess { ip -> _uiState.update { it.copy(publicIp = ip, realPublicIp = ip) } }
                 ipv6.await()
             }
             val location = ipService.getGeoLocation(ipService.cachedPublicIpv6 ?: ipService.cachedPublicIp)
             if (location != null && _uiState.value.connectionState != ConnectionState.CONNECTED) {
                 _uiState.update { it.copy(location = location) }
             }
+            // Only flip isLoadingIp false once both IP and location have been resolved (or
+            // attempted) — flipping it as soon as the IP lands leaves a window where the UI
+            // shows a fresh IP next to a stale location (e.g. still the VPN server's city).
+            _uiState.update { it.copy(isLoadingIp = false) }
         }
     }
 
     private fun fetchIpWithRetryThenGeoLocation() {
         viewModelScope.launch {
             _uiState.update { it.copy(isLoadingIp = true) }
+            // A pooled socket opened over the pre-disconnect network interface can otherwise
+            // keep returning the stale (VPN) IP instead of the current one.
+            ipService.resetConnections()
             coroutineScope {
                 val ipv6 = async { ipService.getPublicIpv6() }
-                var ipv4Success = false
                 for (attempt in 0 until 3) {
                     val result = ipService.getPublicIp()
                     if (result.isSuccess) {
-                        _uiState.update { it.copy(publicIp = result.getOrNull(), realPublicIp = result.getOrNull(), isLoadingIp = false) }
-                        ipv4Success = true
+                        _uiState.update { it.copy(publicIp = result.getOrNull(), realPublicIp = result.getOrNull()) }
                         break
                     }
                     if (attempt < 2) delay(2000)
                 }
-                if (!ipv4Success) _uiState.update { it.copy(isLoadingIp = false) }
                 ipv6.await()
             }
             val location = ipService.getGeoLocation(ipService.cachedPublicIpv6 ?: ipService.cachedPublicIp)
             if (location != null && _uiState.value.connectionState != ConnectionState.CONNECTED) {
                 _uiState.update { it.copy(location = location) }
             }
+            // Same reasoning as fetchIpThenGeoLocation() above — hold Loading... until location
+            // has resolved too, not just the IP.
+            _uiState.update { it.copy(isLoadingIp = false) }
         }
     }
 
     fun selectServer(server: Server) {
-        viewModelScope.launch { serverRepository.selectServer(server) }
+        viewModelScope.launch {
+            val previous = selectedServer.value
+            serverRepository.selectServer(server)
+            val state = vpnConnectionManager.connectionState.value
+            if (previous?.id != server.id &&
+                (state == ConnectionState.CONNECTED || state == ConnectionState.CONNECTING)) {
+                vpnConnectionManager.switchServer(server)
+            }
+        }
     }
 
     fun toggleFavorite(server: Server) {
@@ -247,6 +293,10 @@ class ConnectViewModel @Inject constructor(
                 }
                 viewModelScope.launch {
                     try {
+                        // A recent network change (e.g. relaunch after switching Wi-Fi/cellular)
+                        // can otherwise leave this request stuck on a dead pooled socket and
+                        // fail here even though the session/subscription are actually fine.
+                        authRepository.resetConnections()
                         authRepository.fetchProfile()
                         val user = authRepository.currentUser.value
                         if (user != null && !user.isSubscriptionActive) {
@@ -260,7 +310,8 @@ class ConnectViewModel @Inject constructor(
                 }
             }
             ConnectionState.CONNECTED -> disconnect()
-            else -> { /* Already connecting or disconnecting */ }
+            ConnectionState.CONNECTING -> vpnConnectionManager.cancelConnect()
+            ConnectionState.DISCONNECTING -> { /* Already disconnecting */ }
         }
     }
 
@@ -323,6 +374,7 @@ class ConnectViewModel @Inject constructor(
 
     fun onResume() {
         vpnConnectionManager.resumeStatsPolling()
+        vpnConnectionManager.retryPendingDisconnects()
         startLatencyPolling()
     }
 }

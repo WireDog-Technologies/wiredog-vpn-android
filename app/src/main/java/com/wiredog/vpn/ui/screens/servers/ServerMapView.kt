@@ -34,9 +34,12 @@ import coil.compose.AsyncImage
 import coil.decode.SvgDecoder
 import coil.request.ImageRequest
 import com.wiredog.vpn.R
+import com.wiredog.vpn.domain.model.ConnectionState
 import com.wiredog.vpn.domain.model.Server
 import com.wiredog.vpn.ui.theme.VpnGreen
 import com.wiredog.vpn.ui.theme.VpnPrimary
+import com.wiredog.vpn.ui.theme.VpnRed
+import com.wiredog.vpn.ui.theme.VpnYellow
 import androidx.compose.ui.unit.dp
 import kotlin.math.cos
 import kotlin.math.pow
@@ -47,6 +50,8 @@ import kotlin.math.sqrt
 fun ServerMapView(
     servers: List<Server>,
     selectedServer: Server?,
+    connectionState: ConnectionState,
+    isSwitchingServer: Boolean,
     onServerSelected: (Server) -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -203,9 +208,21 @@ fun ServerMapView(
 
             serverPositions.forEach { (server, position) ->
                 val isSelected = selectedServer?.city == server.city
+                // Marker color reflects live connection status: green only while actually
+                // connected, gold while a connect/disconnect/switch is in flight, red when this
+                // server is selected but there's no live tunnel at all. Non-selected markers
+                // keep the default blue regardless of state.
+                val markerColor = when {
+                    !isSelected -> VpnPrimary
+                    isSwitchingServer -> VpnYellow
+                    connectionState == ConnectionState.CONNECTED -> VpnGreen
+                    connectionState == ConnectionState.CONNECTING ||
+                        connectionState == ConnectionState.DISCONNECTING -> VpnYellow
+                    else -> VpnRed
+                }
                 drawServerMarker(
                     center = Offset(position.x * scaleX, position.y * scaleY),
-                    isSelected = isSelected,
+                    color = markerColor,
                     pulseScale = pulseScale,
                     pulseAlpha = pulseAlpha,
                     scale = scaleX
@@ -217,12 +234,12 @@ fun ServerMapView(
 
 private fun DrawScope.drawServerMarker(
     center: Offset,
-    isSelected: Boolean,
+    color: Color,
     pulseScale: Float,
     pulseAlpha: Float,
     scale: Float
 ) {
-    val baseColor = if (isSelected) VpnGreen else VpnPrimary
+    val baseColor = color
     val outerRadius = 20f * scale
     val innerRadius = 8f * scale
 

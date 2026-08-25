@@ -149,7 +149,7 @@ fun ConnectScreen(
             LocationIpCard(
                 location = uiState.location,
                 ipAddress = uiState.publicIp,
-                isLoading = uiState.isLoadingIp,
+                isTransitioning = uiState.isTransitioning,
                 isConnected = uiState.connectionState == ConnectionState.CONNECTED,
                 onClick = {
                     if (uiState.connectionState == ConnectionState.CONNECTED && selectedServer != null) {
@@ -311,7 +311,7 @@ private fun WireDogLogo(modifier: Modifier = Modifier) {
 private fun LocationIpCard(
     location: String?,
     ipAddress: String?,
-    isLoading: Boolean,
+    isTransitioning: Boolean,
     isConnected: Boolean,
     onClick: () -> Unit,
     modifier: Modifier = Modifier
@@ -336,7 +336,7 @@ private fun LocationIpCard(
                     color = VpnTextSecondary
                 )
                 Text(
-                    text = location ?: "\u2014",
+                    text = if (isTransitioning) "Loading..." else location ?: "\u2014",
                     fontSize = 16.sp,
                     fontFamily = IosevkaTermExtended,
                     color = valueColor,
@@ -354,8 +354,7 @@ private fun LocationIpCard(
                     color = VpnTextSecondary
                 )
                 Text(
-                    text = if (isLoading && ipAddress == null) "Loading..."
-                           else ipAddress ?: "Unknown",
+                    text = if (isTransitioning) "Loading..." else ipAddress ?: "Unknown",
                     fontSize = 16.sp,
                     fontFamily = IosevkaTermExtended,
                     color = valueColor

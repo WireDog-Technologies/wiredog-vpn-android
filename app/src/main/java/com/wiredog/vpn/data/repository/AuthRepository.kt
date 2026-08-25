@@ -13,9 +13,12 @@ import com.wiredog.vpn.data.remote.api.dto.StandardLoginRequest
 import com.wiredog.vpn.data.remote.api.dto.UserProfileDto
 import com.wiredog.vpn.data.remote.api.dto.VerifyResetCodeRequest
 import com.wiredog.vpn.domain.model.User
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.withContext
+import okhttp3.OkHttpClient
 import java.time.LocalDate
 import java.time.format.DateTimeFormatter
 import javax.inject.Inject
@@ -25,7 +28,8 @@ import javax.inject.Singleton
 class AuthRepository @Inject constructor(
     private val api: WireDogApi,
     private val secureStorage: SecureStorage,
-    private val logService: LogService
+    private val logService: LogService,
+    private val okHttpClient: OkHttpClient
 ) {
     private val _currentUser = MutableStateFlow<User?>(null)
     val currentUser: StateFlow<User?> = _currentUser.asStateFlow()
@@ -191,6 +195,17 @@ class AuthRepository @Inject constructor(
         }
     }
 
+    /**
+     * Drops any pooled/keep-alive connections. Should be called before a request that must not
+     * fail on a stale pooled socket left over from a recent network change (e.g. app relaunch
+     * after switching Wi-Fi/cellular, or right after the VPN tunnel connects/disconnects).
+     * Evicting the pool closes live sockets, which is itself blocking I/O — must run off the
+     * main thread or it throws NetworkOnMainThreadException.
+     */
+    suspend fun resetConnections() = withContext(Dispatchers.IO) {
+        okHttpClient.connectionPool.evictAll()
+    }
+
     suspend fun fetchProfile(): Result<User> {
         return try {
             val profile = api.getProfile()
@@ -208,6 +223,9 @@ class AuthRepository @Inject constructor(
             return false
         }
         logService.logApp("Restoring session", LogLevel.DEBUG)
+        // App launch/relaunch is a common place to land on a stale pooled connection from
+        // before a network change — reset first so this fetch doesn't fail for that reason.
+        resetConnections()
         return try {
             val profile = api.getProfile()
             _currentUser.value = profile.toDomain()

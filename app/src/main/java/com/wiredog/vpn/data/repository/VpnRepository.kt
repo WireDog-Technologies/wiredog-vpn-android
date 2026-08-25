@@ -44,15 +44,18 @@ class VpnRepository @Inject constructor(
 
     suspend fun disconnect(): Result<Boolean> {
         val sessionId = currentSessionId ?: secureStorage.getSessionId() ?: return Result.success(true)
+        // Clear local session accounting immediately — the tunnel is already down locally either
+        // way. Only the backend notification below is retried on failure.
+        currentSessionId = null
+        secureStorage.clearSessionId()
+        secureStorage.addPendingDisconnect(sessionId)
         return try {
             api.vpnDisconnect(DisconnectRequest(sessionId))
-            currentSessionId = null
-            secureStorage.clearSessionId()
+            secureStorage.removePendingDisconnect(sessionId)
             Result.success(true)
         } catch (e: Exception) {
-            // Clear session even if API call fails - tunnel is already down locally
-            currentSessionId = null
-            secureStorage.clearSessionId()
+            // Left in the pending list — retried via retryPendingDisconnects() on next
+            // launch/foreground instead of leaking the backend's device-count slot forever.
             Result.success(true)
         }
     }
@@ -64,13 +67,29 @@ class VpnRepository @Inject constructor(
      */
     suspend fun cleanupStaleSession(): Boolean {
         val sessionId = secureStorage.getSessionId() ?: return false
+        secureStorage.clearSessionId()
+        secureStorage.addPendingDisconnect(sessionId)
         return try {
             api.vpnDisconnect(DisconnectRequest(sessionId))
-            secureStorage.clearSessionId()
+            secureStorage.removePendingDisconnect(sessionId)
             true
         } catch (e: Exception) {
-            secureStorage.clearSessionId()
             false
+        }
+    }
+
+    /**
+     * Retries any /disconnect calls that were owed but never confirmed. Safe to call
+     * unconditionally/repeatedly — the backend's /disconnect is idempotent.
+     */
+    suspend fun retryPendingDisconnects() {
+        for (sessionId in secureStorage.getPendingDisconnectIds()) {
+            try {
+                api.vpnDisconnect(DisconnectRequest(sessionId))
+                secureStorage.removePendingDisconnect(sessionId)
+            } catch (e: Exception) {
+                // Still pending — retried again next time.
+            }
         }
     }
 }

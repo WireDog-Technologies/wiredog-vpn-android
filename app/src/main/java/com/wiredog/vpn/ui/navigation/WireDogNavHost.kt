@@ -94,7 +94,7 @@ fun WireDogNavHost(
         }
 
         composable(Screen.Servers.route) {
-            ServersScreen()
+            ServersScreen(navController = navController)
         }
 
         composable(Screen.Connect.route) {

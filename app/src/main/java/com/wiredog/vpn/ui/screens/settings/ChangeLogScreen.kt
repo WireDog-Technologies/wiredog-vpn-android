@@ -38,6 +38,17 @@ data class ChangeLogEntry(
 
 private val changeLog = listOf(
     ChangeLogEntry(
+        version = "1.2.0",
+        date = "August 2026",
+        changes = listOf(
+            "Live connection-status map markers — server markers now turn green when connected, gold while connecting, and red when idle.",
+            "You can now cancel a connection attempt — tap Connect again while connecting or reconnecting to stop it.",
+            "Switching servers while connected now reconnects to the new server automatically, instead of requiring a manual disconnect first.",
+            "Fixed an occasional \"Unable to verify subscription status\" error when connecting.",
+            "Fixed the public IP occasionally not updating right after connecting or disconnecting."
+        )
+    ),
+    ChangeLogEntry(
         version = "1.1.0",
         date = "July 2026",
         changes = listOf(

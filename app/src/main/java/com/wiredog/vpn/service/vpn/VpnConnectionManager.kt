@@ -19,9 +19,11 @@ import com.wiredog.vpn.domain.model.VpnConnectException
 import org.amnezia.awg.backend.GoBackend
 import org.amnezia.awg.backend.Tunnel
 import dagger.hilt.android.qualifiers.ApplicationContext
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -30,6 +32,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import javax.inject.Inject
 import javax.inject.Singleton
 import kotlin.random.Random
@@ -49,6 +52,11 @@ class VpnConnectionManager @Inject constructor(
         private const val STATS_FAILURE_THRESHOLD = 5
         // Grace period on foreground resume: skip health checks for this many ms
         private const val FOREGROUND_GRACE_PERIOD_MS = 8_000L
+        private const val MAX_RECONNECT_ATTEMPTS = 10
+        // A connection that drops before staying up this long never really established — clean
+        // up its backend session slot immediately instead of blindly reconnecting and leaking
+        // another increment on top of it.
+        private const val MINIMUM_STABLE_CONNECTION_DURATION_MS = 30_000L
     }
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
@@ -61,19 +69,33 @@ class VpnConnectionManager @Inject constructor(
     }
 
     private suspend fun runStartupCleanup() {
-        val tunnelState = try {
-            withContext(Dispatchers.IO) { backend.getState(tunnel) }
-        } catch (_: Exception) {
-            return
-        }
-        if (tunnelState != Tunnel.State.DOWN) return
+        try {
+            val tunnelState = withContext(Dispatchers.IO) { backend.getState(tunnel) }
+            if (tunnelState == Tunnel.State.DOWN) {
+                val cleaned = try {
+                    vpnRepository.cleanupStaleSession()
+                } catch (_: Exception) {
+                    false
+                }
+                if (cleaned && BuildConfig.DEBUG) Log.i(TAG, "Startup cleanup: stale session counter decremented")
+            }
+        } catch (_: Exception) { }
 
-        val cleaned = try {
-            vpnRepository.cleanupStaleSession()
-        } catch (_: Exception) {
-            false
+        // Retry any /disconnect calls that were owed but never confirmed — e.g. the app had no
+        // connectivity right as a previous cleanup call went out. Independent of the crash-recovery
+        // check above, which only covers the single current session. Safe to call unconditionally.
+        try {
+            vpnRepository.retryPendingDisconnects()
+        } catch (_: Exception) { }
+    }
+
+    /** Retries any /disconnect calls that never confirmed. Safe to call unconditionally/repeatedly. */
+    fun retryPendingDisconnects() {
+        scope.launch {
+            try {
+                vpnRepository.retryPendingDisconnects()
+            } catch (_: Exception) { }
         }
-        if (cleaned && BuildConfig.DEBUG) Log.i(TAG, "Startup cleanup: stale session counter decremented")
     }
 
     private val _connectionState = MutableStateFlow(ConnectionState.DISCONNECTED)
@@ -95,6 +117,16 @@ class VpnConnectionManager @Inject constructor(
     val showReviewPrompt: StateFlow<Boolean> = _showReviewPrompt.asStateFlow()
     private var hasRecordedReviewPromptForCurrentConnection = false
 
+    private val _isReconnecting = MutableStateFlow(false)
+    val isReconnecting: StateFlow<Boolean> = _isReconnecting.asStateFlow()
+
+    // True while a server switch is tearing down the old tunnel before bringing up the new one.
+    // Lets the UI (e.g. the map marker) treat that whole disconnect-old -> connect-new sequence
+    // as one continuous "in progress" state instead of flickering through the intermediate
+    // connected/disconnected values connectionState genuinely passes through.
+    private val _isSwitchingServer = MutableStateFlow(false)
+    val isSwitchingServer: StateFlow<Boolean> = _isSwitchingServer.asStateFlow()
+
     private var statsJob: Job? = null
     private var previousRxBytes: Long = 0
     private var previousTxBytes: Long = 0
@@ -105,6 +137,10 @@ class VpnConnectionManager @Inject constructor(
     private var isUserDisconnect: Boolean = false
     // Foreground grace period: timestamp after which health checks resume
     private var gracePeriodUntil: Long = 0L
+    // The single in-flight connect or reconnect coroutine, if any — lets cancelConnect() stop
+    // whichever one is currently running.
+    private var activeJob: Job? = null
+    private var reconnectAttempts: Int = 0
 
     fun prepareVpn(): Intent? {
         return GoBackend.VpnService.prepare(context)
@@ -140,8 +176,9 @@ class VpnConnectionManager @Inject constructor(
         currentServer = server
         _connectionError.value = null
         hasRecordedReviewPromptForCurrentConnection = false
+        reconnectAttempts = 0
 
-        scope.launch {
+        activeJob = scope.launch {
             _connectionState.value = ConnectionState.CONNECTING
             logService.logService("Connection attempt to ${server.displayName}")
 
@@ -186,6 +223,7 @@ class VpnConnectionManager @Inject constructor(
                 previousRxBytes = 0
                 previousTxBytes = 0
                 consecutiveStatsFailures = 0
+                reconnectAttempts = 0
 
                 // 7. Save last connected server
                 serverRepository.setLastConnectedServer(server.id)
@@ -198,6 +236,23 @@ class VpnConnectionManager @Inject constructor(
                 if (BuildConfig.DEBUG) Log.i(TAG, "Connected to ${server.displayName}")
                 logService.logService("Connected to ${server.displayName}")
 
+            } catch (e: CancellationException) {
+                // User-initiated cancel (tap-again-to-cancel) — expected, not a failure. No
+                // _connectionError set, so no error surfaces to the user.
+                logService.logService("Connect cancelled")
+                withContext(NonCancellable) {
+                    try {
+                        withContext(Dispatchers.IO) {
+                            backend.setState(tunnel, Tunnel.State.DOWN, null)
+                        }
+                    } catch (_: Exception) { }
+                    // Release the session if the API call already obtained one before the
+                    // cancel landed — vpnRepository.disconnect() no-ops if there's none.
+                    try {
+                        vpnRepository.disconnect()
+                    } catch (_: Exception) { }
+                }
+                _connectionState.value = ConnectionState.DISCONNECTED
             } catch (e: Exception) {
                 if (BuildConfig.DEBUG) Log.e(TAG, "Connection failed", e)
                 logService.logService("Connection failed: ${e.message}", LogLevel.ERROR)
@@ -207,7 +262,47 @@ class VpnConnectionManager @Inject constructor(
                         backend.setState(tunnel, Tunnel.State.DOWN, null)
                     }
                 } catch (_: Exception) { }
+                // If the API call already obtained a session before this later step failed, the
+                // backend's device counter would otherwise leak until the next crash-recovery
+                // check. vpnRepository.disconnect() no-ops if there's no session to release.
+                try {
+                    vpnRepository.disconnect()
+                } catch (_: Exception) { }
             }
+        }
+    }
+
+    /** Cancels an in-progress connect or auto-reconnect. No-op unless currently CONNECTING. */
+    fun cancelConnect() {
+        if (_connectionState.value != ConnectionState.CONNECTING) return
+        logService.logService("Cancel connect requested")
+        isUserDisconnect = true
+        _isReconnecting.value = false
+        activeJob?.cancel()
+    }
+
+    /**
+     * Switches the live tunnel to a different server: tears down whatever's currently
+     * connected/connecting, waits for it to settle, then connects to [server]. No-op if
+     * [server] is already the current one.
+     */
+    fun switchServer(server: Server) {
+        if (currentServer?.id == server.id) return
+        _isSwitchingServer.value = true
+        val wasConnecting = _connectionState.value == ConnectionState.CONNECTING
+        scope.launch {
+            if (wasConnecting) cancelConnect() else disconnect()
+            val reachedDisconnected = withTimeoutOrNull(8_000L) {
+                connectionState.first { it == ConnectionState.DISCONNECTED }
+            } != null
+            if (!reachedDisconnected) {
+                _connectionError.value = "Unable to switch servers. Please try again."
+                _isSwitchingServer.value = false
+                return@launch
+            }
+            connect(server)
+            activeJob?.join()
+            _isSwitchingServer.value = false
         }
     }
 
@@ -218,6 +313,10 @@ class VpnConnectionManager @Inject constructor(
         }
 
         isUserDisconnect = true
+        _isReconnecting.value = false
+        // Stop whichever connect/reconnect attempt is in flight, if any, so it doesn't race
+        // the teardown below.
+        activeJob?.cancel()
 
         scope.launch {
             _connectionState.value = ConnectionState.DISCONNECTING
@@ -258,74 +357,117 @@ class VpnConnectionManager @Inject constructor(
         if (BuildConfig.DEBUG) Log.i(TAG, "Attempting auto-reconnect to ${server.displayName}")
         logService.logService("Auto-reconnecting to ${server.displayName}")
 
-        scope.launch {
+        activeJob = scope.launch {
             _connectionState.value = ConnectionState.CONNECTING
+            _isReconnecting.value = true
 
-            // Try to tear down old tunnel first
+            suspend fun giveUp(reason: String) {
+                logService.logService(reason, LogLevel.ERROR)
+                // Release any session this attempt (or a prior one) claimed — no-ops if none.
+                try { vpnRepository.disconnect() } catch (_: Exception) { }
+                currentServer = null
+                _connectionState.value = ConnectionState.DISCONNECTED
+                _isReconnecting.value = false
+                _connectionError.value = reason
+            }
+
             try {
-                withContext(Dispatchers.IO) {
-                    backend.setState(tunnel, Tunnel.State.DOWN, null)
-                }
-            } catch (_: Exception) { }
-
-            // Exponential backoff retry
-            var delayMs = 1000L
-            var attempt = 0
-
-            while (!isUserDisconnect && _connectionState.value == ConnectionState.CONNECTING) {
-                attempt++
-                if (BuildConfig.DEBUG) Log.i(TAG, "Reconnect attempt $attempt (delay: ${delayMs}ms)")
-                logService.logService("Reconnect attempt $attempt", LogLevel.INFO)
-
+                // Try to tear down old tunnel first. Deliberately inside this try block (not a
+                // separate catch-all before it) so a cancel landing in this narrow window is
+                // caught by the CancellationException handler below instead of being silently
+                // swallowed by a bare `catch (_: Exception)`, which would leave the state stuck
+                // at CONNECTING forever.
                 try {
+                    withContext(Dispatchers.IO) {
+                        backend.setState(tunnel, Tunnel.State.DOWN, null)
+                    }
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (_: Exception) { }
+
+                // Exponential backoff retry, capped at MAX_RECONNECT_ATTEMPTS so a dead server
+                // slot doesn't retry forever and hold a session open indefinitely.
+                var delayMs = 1000L
+
+                while (!isUserDisconnect && _connectionState.value == ConnectionState.CONNECTING) {
+                    if (reconnectAttempts >= MAX_RECONNECT_ATTEMPTS) {
+                        giveUp("Reconnection failed after $MAX_RECONNECT_ATTEMPTS attempts")
+                        return@launch
+                    }
+                    reconnectAttempts++
+                    val attempt = reconnectAttempts
+                    if (BuildConfig.DEBUG) Log.i(TAG, "Reconnect attempt $attempt (delay: ${delayMs}ms)")
+                    logService.logService("Reconnect attempt $attempt", LogLevel.INFO)
+
                     val ipv6Enabled = settingsPreferences.ipv6Enabled.first()
                     val blockAds = settingsPreferences.blockAdsEnabled.first()
                     val blockMalware = settingsPreferences.blockMalwareEnabled.first()
                     val splitTunneling = readSplitTunnelingSettings()
 
                     val result = vpnRepository.connect(server.id, blockAds, blockMalware)
-                    val response = result.getOrElse { e ->
-                        if (BuildConfig.DEBUG) Log.w(TAG, "Reconnect API failed", e)
-                        logService.logService("Reconnect attempt $attempt failed: API error", LogLevel.WARNING)
+                    val response = result.getOrNull()
+                    if (response == null) {
+                        if (BuildConfig.DEBUG) Log.w(TAG, "Reconnect API failed", result.exceptionOrNull())
+                        // Don't retry API failures indefinitely (e.g. device-limit, auth) — no
+                        // session was claimed on this branch, so there's nothing to release.
+                        giveUp("Unable to reconnect. Please try again.")
+                        return@launch
+                    }
+
+                    try {
+                        val config = TunnelConfigBuilder.build(response.config, ipv6Enabled, splitTunneling)
+
+                        withContext(Dispatchers.IO) {
+                            backend.setState(tunnel, Tunnel.State.UP, config)
+                        }
+
+                        // Use backend-assigned exit IP; fall back to resolving the peer endpoint.
+                        _vpnIp.value = response.server?.exitIp ?: try {
+                            val endpointHost = response.config.peer.endpoint.substringBefore(":")
+                            withContext(Dispatchers.IO) {
+                                java.net.InetAddress.getByName(endpointHost).hostAddress
+                            }
+                        } catch (_: Exception) { null }
+
+                        // Success
+                        _connectionState.value = ConnectionState.CONNECTED
+                        _connectionStartTime.value = System.currentTimeMillis()
+                        previousRxBytes = 0
+                        previousTxBytes = 0
+                        consecutiveStatsFailures = 0
+                        reconnectAttempts = 0
+                        _isReconnecting.value = false
+                        startStatsPolling()
+                        maybeShowReviewPrompt()
+                        if (BuildConfig.DEBUG) Log.i(TAG, "Reconnected successfully")
+                        logService.logService("Reconnected successfully after attempt $attempt")
+                        return@launch
+
+                    } catch (e: Exception) {
+                        if (BuildConfig.DEBUG) Log.w(TAG, "Reconnect attempt $attempt failed", e)
+                        logService.logService("Reconnect attempt $attempt failed: ${e.message}", LogLevel.WARNING)
+                        // This attempt claimed a session via vpnRepository.connect() above but
+                        // never brought the tunnel up — release it before backing off, so a
+                        // failed attempt doesn't stack a leaked session on top of the next retry.
+                        try { vpnRepository.disconnect() } catch (_: Exception) { }
                         val jitter = Random.nextDouble(0.5, 1.5)
                         delay((delayMs * jitter).toLong())
                         delayMs = (delayMs * 2).coerceAtMost(MAX_RECONNECT_DELAY_MS)
-                        return@launch // Don't retry API failures indefinitely
                     }
-
-                    val config = TunnelConfigBuilder.build(response.config, ipv6Enabled, splitTunneling)
-
-                    withContext(Dispatchers.IO) {
-                        backend.setState(tunnel, Tunnel.State.UP, config)
-                    }
-
-                    // Use backend-assigned exit IP; fall back to resolving the peer endpoint.
-                    _vpnIp.value = response.server?.exitIp ?: try {
-                        val endpointHost = response.config.peer.endpoint.substringBefore(":")
-                        withContext(Dispatchers.IO) {
-                            java.net.InetAddress.getByName(endpointHost).hostAddress
-                        }
-                    } catch (_: Exception) { null }
-
-                    // Success
-                    _connectionState.value = ConnectionState.CONNECTED
-                    _connectionStartTime.value = System.currentTimeMillis()
-                    previousRxBytes = 0
-                    previousTxBytes = 0
-                    consecutiveStatsFailures = 0
-                    startStatsPolling()
-                    maybeShowReviewPrompt()
-                    if (BuildConfig.DEBUG) Log.i(TAG, "Reconnected successfully")
-                    logService.logService("Reconnected successfully after attempt $attempt")
-                    return@launch
-
-                } catch (e: Exception) {
-                    if (BuildConfig.DEBUG) Log.w(TAG, "Reconnect attempt $attempt failed", e)
-                    logService.logService("Reconnect attempt $attempt failed: ${e.message}", LogLevel.WARNING)
-                    val jitter = Random.nextDouble(0.5, 1.5)
-                    delay((delayMs * jitter).toLong())
-                    delayMs = (delayMs * 2).coerceAtMost(MAX_RECONNECT_DELAY_MS)
                 }
+            } catch (e: CancellationException) {
+                logService.logService("Reconnect cancelled")
+                withContext(NonCancellable) {
+                    try {
+                        withContext(Dispatchers.IO) {
+                            backend.setState(tunnel, Tunnel.State.DOWN, null)
+                        }
+                    } catch (_: Exception) { }
+                    try { vpnRepository.disconnect() } catch (_: Exception) { }
+                }
+                currentServer = null
+                _connectionState.value = ConnectionState.DISCONNECTED
+                _isReconnecting.value = false
             }
         }
     }

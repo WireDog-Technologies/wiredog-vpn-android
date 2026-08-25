@@ -36,8 +36,8 @@ android {
         applicationId = "com.wiredog.vpn"
         minSdk = 28
         targetSdk = 36
-        versionCode = 8
-        versionName = "1.1.0"
+        versionCode = 9
+        versionName = "1.2.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
@@ -54,7 +54,7 @@ android {
             // Android Studio's Run button always builds the debug variant, so running
             // from the IDE hits the integration backend automatically. Release builds
             // (APK/bundle) use the production URL from defaultConfig instead.
-            buildConfigField("String", "WIREDOG_API_BASE_URL", "\"https://wiredog-backend-dev.onrender.com/api\"")
+            buildConfigField("String", "WIREDOG_API_BASE_URL", "\"https://intapi.wiredogvpn.com/api\"")
         }
         release {
             signingConfig = signingConfigs.getByName("release")

@@ -54,6 +54,18 @@ class IpService @Inject constructor(
     val cachedLocation: String?
         get() = prefs.getString("location", null)
 
+    /**
+     * Drops any pooled/keep-alive connections. Should be called after the VPN tunnel disconnects
+     * — otherwise a request can keep reusing a socket opened over the pre-disconnect network
+     * interface and silently keep returning the stale (VPN) IP instead of the current one.
+     * Evicting the pool closes live sockets, which is itself blocking I/O — must run off the
+     * main thread or it throws NetworkOnMainThreadException.
+     */
+    suspend fun resetConnections() = withContext(Dispatchers.IO) {
+        client.connectionPool.evictAll()
+        clientUnrestricted.connectionPool.evictAll()
+    }
+
     suspend fun getPublicIp(): Result<String> = withContext(Dispatchers.IO) {
         try {
             logService.logService("Fetching public IP address")

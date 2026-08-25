@@ -1,5 +1,8 @@
 package com.wiredog.vpn.ui.screens.servers
 
+import android.app.Activity
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.expandVertically
 import androidx.compose.animation.shrinkVertically
@@ -19,8 +22,11 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
@@ -34,10 +40,12 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.navigation.NavController
 import com.wiredog.vpn.ui.components.StateCard
 import com.wiredog.vpn.ui.components.SearchBar
 import com.wiredog.vpn.ui.components.ServerCard
 import com.wiredog.vpn.ui.components.ServerSubItem
+import com.wiredog.vpn.ui.navigation.Screen
 import com.wiredog.vpn.ui.theme.VpnBackground
 import com.wiredog.vpn.ui.theme.VpnPrimary
 import com.wiredog.vpn.ui.theme.VpnRed
@@ -45,12 +53,50 @@ import com.wiredog.vpn.ui.theme.VpnTextSecondary
 
 @Composable
 fun ServersScreen(
+    navController: NavController,
     modifier: Modifier = Modifier,
     viewModel: ServersViewModel = hiltViewModel()
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
     val serverGroups by viewModel.serverGroups.collectAsStateWithLifecycle()
     val selectedServer by viewModel.selectedServer.collectAsStateWithLifecycle()
+    val connectionState by viewModel.connectionState.collectAsStateWithLifecycle()
+    val isSwitchingServer by viewModel.isSwitchingServer.collectAsStateWithLifecycle()
+    val snackbarHostState = remember { SnackbarHostState() }
+
+    // VPN permission launcher
+    val vpnPermissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.StartActivityForResult()
+    ) { result ->
+        if (result.resultCode == Activity.RESULT_OK) {
+            viewModel.onVpnPermissionGranted()
+        } else {
+            viewModel.onVpnPermissionDenied()
+        }
+    }
+
+    // Launch VPN permission dialog when needed
+    LaunchedEffect(uiState.vpnPermissionIntent) {
+        uiState.vpnPermissionIntent?.let { intent ->
+            vpnPermissionLauncher.launch(intent)
+        }
+    }
+
+    // Show connect-attempt errors (subscription check / VPN permission) as a snackbar — distinct
+    // from uiState.error below, which replaces the whole list with a retry screen.
+    LaunchedEffect(uiState.connectError) {
+        uiState.connectError?.let { error ->
+            snackbarHostState.showSnackbar(error)
+            viewModel.clearConnectError()
+        }
+    }
+
+    if (uiState.needsSubscription) {
+        LaunchedEffect(Unit) {
+            navController.navigate(Screen.Subscription.route)
+            viewModel.closeSubscriptionSheet()
+        }
+    }
 
     val screenHeight = LocalConfiguration.current.screenHeightDp.dp
     val mapHeight = screenHeight * 0.60f
@@ -84,6 +130,8 @@ fun ServersScreen(
             ServerMapView(
                 servers = mapServers,
                 selectedServer = selectedServer,
+                connectionState = connectionState,
+                isSwitchingServer = isSwitchingServer,
                 onServerSelected = { viewModel.selectServer(it) },
                 modifier = Modifier.fillMaxSize()
             )
@@ -308,6 +356,11 @@ fun ServersScreen(
                 }
             }
         }
+
+        SnackbarHost(
+            hostState = snackbarHostState,
+            modifier = Modifier.align(Alignment.BottomCenter)
+        )
     }
 
     uiState.sheetGroup?.let { staleGroup ->

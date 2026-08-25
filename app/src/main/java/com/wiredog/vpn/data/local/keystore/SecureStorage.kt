@@ -66,6 +66,26 @@ class SecureStorage @Inject constructor(
         securePrefs.edit().remove(KEY_SESSION_ID).apply()
     }
 
+    /**
+     * Durable record of VPN sessionIds still owed a confirmed /disconnect call — e.g. the app
+     * had no connectivity when the call was attempted. Backed by EncryptedSharedPreferences so
+     * it survives process death; retried via VpnRepository.retryPendingDisconnects() on next
+     * launch/foreground.
+     */
+    fun addPendingDisconnect(sessionId: String) {
+        val current = securePrefs.getStringSet(KEY_PENDING_DISCONNECT_IDS, emptySet()) ?: emptySet()
+        securePrefs.edit().putStringSet(KEY_PENDING_DISCONNECT_IDS, current + sessionId).apply()
+    }
+
+    fun removePendingDisconnect(sessionId: String) {
+        val current = securePrefs.getStringSet(KEY_PENDING_DISCONNECT_IDS, emptySet()) ?: emptySet()
+        securePrefs.edit().putStringSet(KEY_PENDING_DISCONNECT_IDS, current - sessionId).apply()
+    }
+
+    fun getPendingDisconnectIds(): Set<String> {
+        return securePrefs.getStringSet(KEY_PENDING_DISCONNECT_IDS, emptySet()) ?: emptySet()
+    }
+
     fun clearAll() {
         securePrefs.edit().clear().apply()
     }
@@ -75,5 +95,6 @@ class SecureStorage @Inject constructor(
         private const val KEY_AUTH_TOKEN = "auth_token"
         private const val KEY_LOGIN_IDENTIFIER = "login_identifier"
         private const val KEY_SESSION_ID = "vpn_session_id"
+        private const val KEY_PENDING_DISCONNECT_IDS = "vpn_pending_disconnect_ids"
     }
 }

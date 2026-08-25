@@ -38,8 +38,9 @@ fun PowerButton(
     modifier: Modifier = Modifier,
     size: Dp = 140.dp
 ) {
-    val isConnecting = connectionState == ConnectionState.CONNECTING ||
-            connectionState == ConnectionState.DISCONNECTING
+    // Disabled only while disconnecting — there's nothing to cancel there. CONNECTING stays
+    // tappable so the user can cancel an in-progress connection attempt.
+    val isDisabled = connectionState == ConnectionState.DISCONNECTING
 
     val statusColor by animateColorAsState(
         targetValue = when (connectionState) {
@@ -63,7 +64,7 @@ fun PowerButton(
             .clip(CircleShape)
             .background(statusColor)
             .clickable(
-                enabled = !isConnecting,
+                enabled = !isDisabled,
                 onClick = onClick
             ),
         contentAlignment = Alignment.Center
@@ -77,7 +78,7 @@ fun PowerButton(
             },
             contentDescription = when (connectionState) {
                 ConnectionState.CONNECTED -> "Connected - tap to disconnect"
-                ConnectionState.CONNECTING -> "Connecting..."
+                ConnectionState.CONNECTING -> "Connecting... tap to cancel"
                 ConnectionState.DISCONNECTING -> "Disconnecting..."
                 ConnectionState.DISCONNECTED -> "Disconnected - tap to connect"
             },
