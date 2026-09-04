@@ -4,6 +4,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.wiredog.vpn.data.repository.AuthRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -28,13 +29,21 @@ class AnonymousAccountViewModel @Inject constructor(
     private val _uiState = MutableStateFlow(AnonymousAccountUiState())
     val uiState: StateFlow<AnonymousAccountUiState> = _uiState.asStateFlow()
 
+    // Guards against a duplicate account being minted: `init` and the "Try Again" button both
+    // call createAccount(), and the backend's /auth/register/anonymous has no idempotency key —
+    // a second concurrent call creates a second, unrelated account.
+    private var creationJob: Job? = null
+
     init {
         createAccount()
     }
 
     fun createAccount() {
+        if (_uiState.value.accountNumber != null) return
+        if (creationJob?.isActive == true) return
+
         _uiState.update { AnonymousAccountUiState(isGenerating = true, error = null) }
-        viewModelScope.launch {
+        creationJob = viewModelScope.launch {
             authRepository.registerAnonymous()
                 .onSuccess { accountNumber ->
                     _uiState.update { it.copy(isGenerating = false, accountNumber = accountNumber) }

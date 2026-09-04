@@ -50,6 +50,8 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.navigation.NavController
 import com.wiredog.vpn.ui.navigation.Screen
 import com.wiredog.vpn.domain.model.ConnectionState
+import com.wiredog.vpn.ui.screens.announcements.AnnouncementBell
+import com.wiredog.vpn.ui.screens.announcements.AnnouncementsSheet
 import com.wiredog.vpn.ui.components.ConnectionStatusText
 import com.wiredog.vpn.ui.components.ConnectionTimer
 import com.wiredog.vpn.ui.components.IosevkaTermExtended
@@ -75,10 +77,14 @@ fun ConnectScreen(
     val uiState by viewModel.uiState.collectAsState()
     val selectedServer by viewModel.selectedServer.collectAsState()
     val servers by viewModel.servers.collectAsState()
+    val announcements by viewModel.announcements.collectAsState()
+    val readAnnouncementIds by viewModel.readAnnouncementIds.collectAsState()
+    val unreadAnnouncementCount by viewModel.unreadAnnouncementCount.collectAsState()
     val snackbarHostState = remember { SnackbarHostState() }
     val view = LocalView.current
     var showServerDetails by remember { mutableStateOf(false) }
     var showServerSelector by remember { mutableStateOf(false) }
+    var showAnnouncements by remember { mutableStateOf(false) }
     var elapsedSeconds by remember { mutableLongStateOf(0L) }
 
     // VPN permission launcher
@@ -142,7 +148,16 @@ fun ConnectScreen(
         ) {
             Spacer(modifier = Modifier.height(16.dp))
 
-            WireDogLogo()
+            Box(modifier = Modifier.fillMaxWidth()) {
+                WireDogLogo()
+                if (announcements.isNotEmpty()) {
+                    AnnouncementBell(
+                        unreadCount = unreadAnnouncementCount,
+                        onClick = { showAnnouncements = true },
+                        modifier = Modifier.align(Alignment.CenterEnd)
+                    )
+                }
+            }
 
             Spacer(modifier = Modifier.height(24.dp))
 
@@ -231,6 +246,16 @@ fun ConnectScreen(
                 connectionDuration = durationString,
                 isConnected = uiState.connectionState == ConnectionState.CONNECTED,
                 onDismiss = { showServerDetails = false }
+            )
+        }
+
+        if (showAnnouncements) {
+            AnnouncementsSheet(
+                announcements = announcements,
+                readIds = readAnnouncementIds,
+                onMarkRead = { viewModel.markAnnouncementsRead(it) },
+                onMarkUnread = { viewModel.markAnnouncementUnread(it) },
+                onDismiss = { showAnnouncements = false }
             )
         }
 

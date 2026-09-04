@@ -36,8 +36,8 @@ android {
         applicationId = "com.wiredog.vpn"
         minSdk = 28
         targetSdk = 36
-        versionCode = 9
-        versionName = "1.2.0"
+        versionCode = 10
+        versionName = "1.3.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
@@ -46,6 +46,7 @@ android {
         buildConfigField("String", "WIREDOG_URL_PRIVACY", "\"https://www.wiredogvpn.com/legal/privacy\"")
         buildConfigField("String", "WIREDOG_URL_TERMS", "\"https://www.wiredogvpn.com/legal/terms-of-service\"")
         buildConfigField("String", "WIREDOG_URL_GET_STARTED", "\"https://www.wiredogvpn.com/get-started\"")
+        buildConfigField("String", "WIREDOG_URL_CHECKOUT", "\"https://www.wiredogvpn.com/checkout\"")
         buildConfigField("String", "WIREDOG_APP_STORE_URL", "\"https://play.google.com/store/apps/details?id=com.wiredog.vpn\"")
     }
 

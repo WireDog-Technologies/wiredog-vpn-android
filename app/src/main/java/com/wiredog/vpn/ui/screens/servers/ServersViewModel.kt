@@ -96,6 +96,31 @@ class ServersViewModel @Inject constructor(
 
     init {
         loadServers()
+        observeConnectionForLatency()
+    }
+
+    /**
+     * Latency probes route through the tunnel while connected (you -> exit node -> target),
+     * inflating every non-current server. Only measure while disconnected; the last
+     * disconnected values stay on screen otherwise, and a fresh sweep runs on disconnect.
+     */
+    private fun measureLatenciesIfDisconnected() {
+        if (vpnConnectionManager.connectionState.value == ConnectionState.DISCONNECTED) {
+            viewModelScope.launch { serverRepository.measureAndUpdateLatencies() }
+        }
+    }
+
+    private fun observeConnectionForLatency() {
+        viewModelScope.launch {
+            var wasConnected = false
+            vpnConnectionManager.connectionState.collect { state ->
+                val connected = state != ConnectionState.DISCONNECTED
+                if (wasConnected && !connected) {
+                    serverRepository.measureAndUpdateLatencies()
+                }
+                wasConnected = connected
+            }
+        }
     }
 
     fun loadServers() {
@@ -106,7 +131,7 @@ class ServersViewModel @Inject constructor(
                 .onSuccess {
                     _uiState.update { it.copy(isLoading = false) }
                     serverRepository.restoreSelectedServer()
-                    launch { serverRepository.measureAndUpdateLatencies() }
+                    measureLatenciesIfDisconnected()
                 }
                 .onFailure { e ->
                     _uiState.update {
@@ -126,7 +151,7 @@ class ServersViewModel @Inject constructor(
             serverRepository.fetchServers(forceRefresh = true)
                 .onSuccess {
                     _uiState.update { it.copy(isLoading = false) }
-                    launch { serverRepository.measureAndUpdateLatencies() }
+                    measureLatenciesIfDisconnected()
                 }
                 .onFailure { e ->
                     _uiState.update {

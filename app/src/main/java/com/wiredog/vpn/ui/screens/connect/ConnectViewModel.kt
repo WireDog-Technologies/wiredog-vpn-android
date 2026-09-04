@@ -5,8 +5,10 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.wiredog.vpn.data.local.preferences.SettingsPreferences
 import com.wiredog.vpn.data.remote.IpService
+import com.wiredog.vpn.data.repository.AnnouncementRepository
 import com.wiredog.vpn.data.repository.AuthRepository
 import com.wiredog.vpn.data.repository.ServerRepository
+import com.wiredog.vpn.domain.model.Announcement
 import com.wiredog.vpn.domain.model.ConnectionState
 import com.wiredog.vpn.domain.model.ConnectionStats
 import com.wiredog.vpn.domain.model.Server
@@ -58,8 +60,16 @@ class ConnectViewModel @Inject constructor(
     private val ipService: IpService,
     private val vpnConnectionManager: VpnConnectionManager,
     private val authRepository: AuthRepository,
-    private val settingsPreferences: SettingsPreferences
+    private val settingsPreferences: SettingsPreferences,
+    private val announcementRepository: AnnouncementRepository
 ) : ViewModel() {
+
+    val announcements: StateFlow<List<Announcement>> = announcementRepository.messages
+    val readAnnouncementIds: StateFlow<Set<String>> = announcementRepository.readIds
+    val unreadAnnouncementCount: StateFlow<Int> = announcementRepository.unreadCount
+
+    fun markAnnouncementsRead(id: String) = announcementRepository.markRead(listOf(id))
+    fun markAnnouncementUnread(id: String) = announcementRepository.markUnread(id)
 
     private val _uiState = MutableStateFlow(ConnectUiState())
     val uiState: StateFlow<ConnectUiState> = _uiState.asStateFlow()
@@ -103,7 +113,13 @@ class ConnectViewModel @Inject constructor(
         latencyPollingJob?.cancel()
         latencyPollingJob = viewModelScope.launch {
             while (true) {
-                serverRepository.measureAndUpdateLatencies()
+                // Only probe while the tunnel is down. With it up, every probe socket routes
+                // through the tunnel (you -> exit node -> target), so non-current servers read
+                // inflated by ~your RTT to the exit. Freeze on the last disconnected values
+                // instead; observeConnectionState() re-measures on the next disconnect.
+                if (vpnConnectionManager.connectionState.value == ConnectionState.DISCONNECTED) {
+                    serverRepository.measureAndUpdateLatencies()
+                }
                 val jitter = Random.nextLong(-10_000L, 10_000L)
                 delay(60_000L + jitter)
             }
@@ -125,11 +141,15 @@ class ConnectViewModel @Inject constructor(
                 _uiState.update { it.copy(connectionStartTime = startTime) }
 
                 if (state == ConnectionState.CONNECTED && previousState != ConnectionState.CONNECTED) {
+                    // Show the backend-assigned exit IP verbatim (null -> the card renders
+                    // "Unknown"). Deliberately not `?: publicIp` — falling back to the stale
+                    // pre-connect IP here would misreport the user as exiting from their real
+                    // address. Location is taken blindly from the selected server, no lookup.
                     val vpnIp = vpnConnectionManager.vpnIp.value
                     val server = selectedServer.value
                     _uiState.update {
                         it.copy(
-                            publicIp = vpnIp ?: it.publicIp,
+                            publicIp = vpnIp,
                             location = if (server != null) "${server.city}, ${ipService.abbreviateState(server.state)}" else it.location,
                             isLoadingIp = false
                         )
@@ -149,6 +169,9 @@ class ConnectViewModel @Inject constructor(
                     _uiState.update { it.copy(isLoadingIp = true) }
                     delay(500)
                     fetchIpWithRetryThenGeoLocation()
+                    // Latency probing was frozen while connected (would have measured through
+                    // the tunnel) — refresh now that we're back on the direct path.
+                    viewModelScope.launch { serverRepository.measureAndUpdateLatencies() }
                 }
             }
         }
@@ -222,8 +245,17 @@ class ConnectViewModel @Inject constructor(
             coroutineScope {
                 val ipv4 = async { ipService.getPublicIp() }
                 val ipv6 = async { ipService.getPublicIpv6() }
-                ipv4.await()
-                    .onSuccess { ip -> _uiState.update { it.copy(publicIp = ip, realPublicIp = ip) } }
+                ipv4.await().onSuccess { ip ->
+                    // Never let a third-party IP echo overwrite the exit IP while connected —
+                    // the connected display is the backend-assigned exit IP only. realPublicIp
+                    // (the "My IP" real address) is always safe to update.
+                    _uiState.update {
+                        it.copy(
+                            publicIp = if (it.connectionState == ConnectionState.CONNECTED) it.publicIp else ip,
+                            realPublicIp = ip
+                        )
+                    }
+                }
                 ipv6.await()
             }
             val location = ipService.getGeoLocation(ipService.cachedPublicIpv6 ?: ipService.cachedPublicIp)
@@ -248,7 +280,13 @@ class ConnectViewModel @Inject constructor(
                 for (attempt in 0 until 3) {
                     val result = ipService.getPublicIp()
                     if (result.isSuccess) {
-                        _uiState.update { it.copy(publicIp = result.getOrNull(), realPublicIp = result.getOrNull()) }
+                        val ip = result.getOrNull()
+                        _uiState.update {
+                            it.copy(
+                                publicIp = if (it.connectionState == ConnectionState.CONNECTED) it.publicIp else ip,
+                                realPublicIp = ip
+                            )
+                        }
                         break
                     }
                     if (attempt < 2) delay(2000)
@@ -282,7 +320,10 @@ class ConnectViewModel @Inject constructor(
     }
 
     fun toggleConnection() {
-        val currentState = _uiState.value.connectionState
+        // Read the manager's live state, not the mirrored UI copy — on a fast double-tap the
+        // mirror can still say DISCONNECTED after the first tap already started a connect,
+        // which would make the second tap fire a *second* connect instead of cancelling.
+        val currentState = vpnConnectionManager.connectionState.value
         val server = selectedServer.value
 
         when (currentState) {

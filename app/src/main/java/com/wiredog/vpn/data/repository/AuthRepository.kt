@@ -1,5 +1,6 @@
 package com.wiredog.vpn.data.repository
 
+import com.wiredog.vpn.data.config.Config
 import com.wiredog.vpn.data.local.keystore.SecureStorage
 import com.wiredog.vpn.data.logging.LogLevel
 import com.wiredog.vpn.data.logging.LogService
@@ -204,6 +205,23 @@ class AuthRepository @Inject constructor(
      */
     suspend fun resetConnections() = withContext(Dispatchers.IO) {
         okHttpClient.connectionPool.evictAll()
+    }
+
+    /**
+     * Mints a one-time handoff code so the checkout website can recognize this
+     * already-authenticated user without a second sign-in. The code travels as a URL
+     * fragment (`#`) — never a query param — so it is never sent to the server or included
+     * in a Referer header. Falls back to the public get-started funnel if the request fails
+     * (e.g. offline), so a network hiccup never dead-ends the flow.
+     */
+    suspend fun checkoutUrl(): String {
+        return try {
+            val response = api.handoffToken()
+            "${Config.checkoutURL}#handoff=${response.token}"
+        } catch (e: Exception) {
+            logService.logApp("Checkout handoff token request failed: ${e.message}", LogLevel.WARNING)
+            Config.getStartedURL
+        }
     }
 
     suspend fun fetchProfile(): Result<User> {

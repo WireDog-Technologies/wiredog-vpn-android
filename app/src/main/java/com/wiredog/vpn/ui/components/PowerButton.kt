@@ -94,24 +94,13 @@ fun ConnectionStatusText(
     modifier: Modifier = Modifier
 ) {
     val statusColor by animateColorAsState(
-        targetValue = when (connectionState) {
-            ConnectionState.CONNECTED -> VpnGreen
-            ConnectionState.CONNECTING, ConnectionState.DISCONNECTING -> VpnYellow
-            ConnectionState.DISCONNECTED -> VpnRed
-        },
+        targetValue = connectionStatusColor(connectionState),
         animationSpec = tween(300),
         label = "statusTextColor"
     )
 
-    val statusText = when (connectionState) {
-        ConnectionState.CONNECTED -> "PROTECTED"
-        ConnectionState.CONNECTING -> "CONNECTING..."
-        ConnectionState.DISCONNECTING -> "DISCONNECTING..."
-        ConnectionState.DISCONNECTED -> "UNPROTECTED"
-    }
-
     androidx.compose.material3.Text(
-        text = statusText,
+        text = connectionStatusLabel(connectionState),
         modifier = modifier,
         color = statusColor,
         fontSize = 20.sp,

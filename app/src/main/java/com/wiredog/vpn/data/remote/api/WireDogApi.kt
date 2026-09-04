@@ -1,5 +1,6 @@
 package com.wiredog.vpn.data.remote.api
 
+import com.wiredog.vpn.data.remote.api.dto.AnnouncementDto
 import com.wiredog.vpn.data.remote.api.dto.AnonymousAccountRequest
 import com.wiredog.vpn.data.remote.api.dto.AnonymousLoginRequest
 import com.wiredog.vpn.data.remote.api.dto.AnonymousRegisterResponse
@@ -9,6 +10,7 @@ import com.wiredog.vpn.data.remote.api.dto.ConnectResponse
 import com.wiredog.vpn.data.remote.api.dto.DisconnectRequest
 import com.wiredog.vpn.data.remote.api.dto.DisconnectResponse
 import com.wiredog.vpn.data.remote.api.dto.ForgotPasswordRequest
+import com.wiredog.vpn.data.remote.api.dto.HandoffTokenResponse
 import com.wiredog.vpn.data.remote.api.dto.LoginResponse
 import com.wiredog.vpn.data.remote.api.dto.LogoutResponse
 import com.wiredog.vpn.data.remote.api.dto.MessageResponse
@@ -32,6 +34,10 @@ interface WireDogApi {
     @GET("app/config")
     suspend fun getAppConfig(): AppConfigResponse
 
+    // In-app announcements (public, no auth)
+    @GET("app/announcements")
+    suspend fun getAnnouncements(): List<AnnouncementDto>
+
     // Auth endpoints
     @POST("auth/login")
     suspend fun loginStandard(@Body request: StandardLoginRequest): LoginResponse
@@ -50,6 +56,10 @@ interface WireDogApi {
 
     @POST("auth/register/anonymous")
     suspend fun registerAnonymous(@Body request: AnonymousAccountRequest): AnonymousRegisterResponse
+
+    // Mints a one-time code so the checkout website recognizes this already-authenticated user.
+    @POST("auth/handoff-token")
+    suspend fun handoffToken(): HandoffTokenResponse
 
     @DELETE("auth/account")
     suspend fun deleteAccount(): MessageResponse

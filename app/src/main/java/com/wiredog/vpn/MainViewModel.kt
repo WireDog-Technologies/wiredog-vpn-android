@@ -38,11 +38,13 @@ class MainViewModel @Inject constructor(
 
     init {
         val needsDisclosure = !hasAcceptedPrivacyDisclosure(context)
-        _uiState.value = _uiState.value.copy(
-            showPrivacyDisclosure = needsDisclosure,
-            isLoading = false
-        )
-        if (!needsDisclosure) {
+        if (needsDisclosure) {
+            _uiState.value = _uiState.value.copy(showPrivacyDisclosure = true, isLoading = false)
+        } else {
+            // Seed the logged-in state from the stored auth token so a returning user lands
+            // straight on the app. Without this the UI renders the login screen for the
+            // moment the async session check takes, then snaps to the app (a visible blip).
+            _uiState.value = _uiState.value.copy(isLoggedIn = authRepository.isLoggedIn.value)
             checkAppConfigThenSession()
         }
     }
@@ -64,12 +66,13 @@ class MainViewModel @Inject constructor(
                 }
             }
 
-            // Continue to session check
+            // Reveal the UI now. isLoggedIn is already seeded from the stored token, so a
+            // returning user sees the app, not the login screen. checkSession() below only
+            // flips to logged-out if the token turned out to be invalid (a 401 cleared it).
+            _uiState.value = _uiState.value.copy(isLoading = false)
+
             val isLoggedIn = authRepository.checkSession()
-            _uiState.value = _uiState.value.copy(
-                isLoading = false,
-                isLoggedIn = isLoggedIn
-            )
+            _uiState.value = _uiState.value.copy(isLoggedIn = isLoggedIn)
         }
     }
 
@@ -90,7 +93,11 @@ class MainViewModel @Inject constructor(
 
     fun acceptPrivacyDisclosure() {
         setPrivacyDisclosureAccepted(context)
-        _uiState.value = _uiState.value.copy(showPrivacyDisclosure = false)
+        _uiState.value = _uiState.value.copy(
+            showPrivacyDisclosure = false,
+            isLoading = true,
+            isLoggedIn = authRepository.isLoggedIn.value
+        )
         checkAppConfigThenSession()
     }
 }

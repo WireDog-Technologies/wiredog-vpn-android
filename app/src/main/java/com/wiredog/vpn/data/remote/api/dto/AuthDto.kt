@@ -36,10 +36,18 @@ data class LogoutResponse(
 )
 
 @JsonClass(generateAdapter = true)
+data class HandoffTokenResponse(
+    @Json(name = "token") val token: String,
+    @Json(name = "expiresIn") val expiresIn: Int
+)
+
+@JsonClass(generateAdapter = true)
 data class StandardAccountRequest(
     @Json(name = "email") val email: String,
     @Json(name = "password") val password: String,
-    @Json(name = "referralCode") val referralCode: String? = null
+    @Json(name = "referralCode") val referralCode: String? = null,
+    // Surface the account was created from — backend records it for signup metrics.
+    @Json(name = "platform") val platform: String = "Android"
 )
 
 @JsonClass(generateAdapter = true)
@@ -49,7 +57,10 @@ data class StandardAccountResponse(
 )
 
 @JsonClass(generateAdapter = true)
-class AnonymousAccountRequest
+data class AnonymousAccountRequest(
+    // Surface the account was created from — backend records it for signup metrics.
+    @Json(name = "platform") val platform: String = "Android"
+)
 
 @JsonClass(generateAdapter = true)
 data class AnonymousRegisterResponse(

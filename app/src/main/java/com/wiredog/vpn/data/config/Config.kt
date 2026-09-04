@@ -8,6 +8,10 @@ object Config {
     val privacyPolicyURL: String = BuildConfig.WIREDOG_URL_PRIVACY
     val termsOfServiceURL: String = BuildConfig.WIREDOG_URL_TERMS
     val getStartedURL: String = BuildConfig.WIREDOG_URL_GET_STARTED
+
+    // Must point at the same environment WIREDOG_API_BASE_URL does — the checkout page
+    // exchanges a handoff code against whichever API/DB minted it.
+    val checkoutURL: String = BuildConfig.WIREDOG_URL_CHECKOUT
     val appStoreURL: String = BuildConfig.WIREDOG_APP_STORE_URL
     val pricingURL: String = "https://www.wiredogvpn.com/#pricing"
     val loginURL: String = "https://www.wiredogvpn.com/login"

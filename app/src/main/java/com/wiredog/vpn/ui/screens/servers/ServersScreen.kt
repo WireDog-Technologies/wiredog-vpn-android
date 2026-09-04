@@ -41,6 +41,7 @@ import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.navigation.NavController
+import com.wiredog.vpn.ui.components.ConnectionStatusBanner
 import com.wiredog.vpn.ui.components.StateCard
 import com.wiredog.vpn.ui.components.SearchBar
 import com.wiredog.vpn.ui.components.ServerCard
@@ -356,6 +357,15 @@ fun ServersScreen(
                 }
             }
         }
+
+        // Protection status banner — parity with the iOS Servers screen.
+        ConnectionStatusBanner(
+            connectionState = connectionState,
+            isSwitchingServer = isSwitchingServer,
+            modifier = Modifier
+                .align(Alignment.TopCenter)
+                .padding(top = 12.dp)
+        )
 
         SnackbarHost(
             hostState = snackbarHostState,

@@ -38,6 +38,16 @@ data class ChangeLogEntry(
 
 private val changeLog = listOf(
     ChangeLogEntry(
+        version = "1.3.0",
+        date = "September 2026",
+        changes = listOf(
+            "In-app announcements now keep you updated on server maintenance, status, and incidents.",
+            "The Servers screen now shows whether you're Protected or Unprotected at a glance.",
+            "Fixed server latency readings being inflated while connected to a VPN server.",
+            "Fixed occasional incorrect \"device limit reached\" errors when connecting."
+        )
+    ),
+    ChangeLogEntry(
         version = "1.2.0",
         date = "August 2026",
         changes = listOf(

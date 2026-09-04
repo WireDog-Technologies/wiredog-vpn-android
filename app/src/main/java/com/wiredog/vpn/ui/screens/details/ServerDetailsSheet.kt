@@ -182,7 +182,11 @@ private fun ConnectionDetailsCard(
 
             DetailRow(
                 label = "VPN IP",
-                value = if (isConnected) vpnIp ?: "Not connected" else "Not connected"
+                value = when {
+                    !isConnected -> "Not connected"
+                    vpnIp != null -> vpnIp
+                    else -> "Unknown"
+                }
             )
 
             DetailDivider()

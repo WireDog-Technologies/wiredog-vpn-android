@@ -26,6 +26,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -167,6 +168,11 @@ class VpnConnectionManager @Inject constructor(
     }
 
     fun connect(server: Server) {
+        // `_connectionState` only flips to CONNECTING inside the launched coroutine below, so
+        // two rapid connect() calls (double-tap, or a stale-state re-tap) could both get past a
+        // state check and each fire their own /connect — leaking one session's counter slot.
+        // `scope` is the main dispatcher, so this check + the assignment below are serialized.
+        if (activeJob?.isActive == true) return
         if (_connectionState.value == ConnectionState.CONNECTING ||
             _connectionState.value == ConnectionState.CONNECTED) {
             return
@@ -189,16 +195,28 @@ class VpnConnectionManager @Inject constructor(
                 val blockMalware = settingsPreferences.blockMalwareEnabled.first()
                 val splitTunneling = readSplitTunnelingSettings()
 
-                // 2. Call API to get WireGuard config
+                // 2. Call API to get WireGuard config. vpnRepository.connect() runs the request
+                // itself NonCancellable so the sessionId is always captured even if we were
+                // cancelled mid-request — the ensureActive() below then routes that cancel to
+                // the cleanup handler, which releases the just-created session.
                 val result = vpnRepository.connect(server.id, blockAds, blockMalware)
                 val response = result.getOrElse { e ->
+                    if (e is CancellationException) throw e
                     if (BuildConfig.DEBUG) Log.e(TAG, "API connect failed", e)
                     logService.logService("Connection failed: API error", LogLevel.ERROR)
                     _connectionState.value = ConnectionState.DISCONNECTED
                     _connectionError.value = (e as? VpnConnectException)?.message
                         ?: "Unable to connect. Please try again."
+                    // Belt-and-suspenders: no-ops if no session was claimed, but releases one
+                    // if the failure somehow arrived after the backend created the session.
+                    try { vpnRepository.disconnect() } catch (_: Exception) { }
                     return@launch
                 }
+
+                // A cancel (or disconnect()) that landed while the NonCancellable /connect was
+                // in flight lands here — throw into the CancellationException handler so the
+                // session that was just created server-side gets released.
+                ensureActive()
 
                 // 3. Build WireGuard Config from API response
                 val config = TunnelConfigBuilder.build(response.config, ipv6Enabled, splitTunneling)
@@ -208,14 +226,15 @@ class VpnConnectionManager @Inject constructor(
                     backend.setState(tunnel, Tunnel.State.UP, config)
                 }
 
-                // 5. Use backend-assigned exit IP for display; fall back to resolving the
-                // peer endpoint only if the backend didn't return one.
-                _vpnIp.value = response.server?.exitIp ?: try {
-                    val endpointHost = response.config.peer.endpoint.substringBefore(":")
-                    withContext(Dispatchers.IO) {
-                        java.net.InetAddress.getByName(endpointHost).hostAddress
-                    }
-                } catch (_: Exception) { null }
+                // A cancel/disconnect that landed while the tunnel was coming up: tear it back
+                // down via the CancellationException handler rather than flashing CONNECTED.
+                ensureActive()
+
+                // 5. Display the backend-assigned exit IP verbatim — it's authoritative (the
+                // backend SNATs the session to this address). Never probe a third-party
+                // IP-echo service or resolve the peer endpoint (that's the entry/handshake
+                // host, not the exit IP). A blank value means "unknown" — the UI shows that.
+                _vpnIp.value = response.server?.exitIp?.takeIf { it.isNotBlank() }
 
                 // 6. Mark connected
                 _connectionState.value = ConnectionState.CONNECTED
@@ -256,18 +275,22 @@ class VpnConnectionManager @Inject constructor(
             } catch (e: Exception) {
                 if (BuildConfig.DEBUG) Log.e(TAG, "Connection failed", e)
                 logService.logService("Connection failed: ${e.message}", LogLevel.ERROR)
+                withContext(NonCancellable) {
+                    try {
+                        withContext(Dispatchers.IO) {
+                            backend.setState(tunnel, Tunnel.State.DOWN, null)
+                        }
+                    } catch (_: Exception) { }
+                    // If the API call already obtained a session before this later step failed,
+                    // the backend's device counter would otherwise leak until the next
+                    // crash-recovery check. Releasing before we publish DISCONNECTED keeps a
+                    // switchServer()/reconnect waiting on that state from starting a new session
+                    // while this one's release is still in flight.
+                    try {
+                        vpnRepository.disconnect()
+                    } catch (_: Exception) { }
+                }
                 _connectionState.value = ConnectionState.DISCONNECTED
-                try {
-                    withContext(Dispatchers.IO) {
-                        backend.setState(tunnel, Tunnel.State.DOWN, null)
-                    }
-                } catch (_: Exception) { }
-                // If the API call already obtained a session before this later step failed, the
-                // backend's device counter would otherwise leak until the next crash-recovery
-                // check. vpnRepository.disconnect() no-ops if there's no session to release.
-                try {
-                    vpnRepository.disconnect()
-                } catch (_: Exception) { }
             }
         }
     }
@@ -421,13 +444,9 @@ class VpnConnectionManager @Inject constructor(
                             backend.setState(tunnel, Tunnel.State.UP, config)
                         }
 
-                        // Use backend-assigned exit IP; fall back to resolving the peer endpoint.
-                        _vpnIp.value = response.server?.exitIp ?: try {
-                            val endpointHost = response.config.peer.endpoint.substringBefore(":")
-                            withContext(Dispatchers.IO) {
-                                java.net.InetAddress.getByName(endpointHost).hostAddress
-                            }
-                        } catch (_: Exception) { null }
+                        // Display the backend-assigned exit IP verbatim (see connect() above).
+                        // Blank = unknown.
+                        _vpnIp.value = response.server?.exitIp?.takeIf { it.isNotBlank() }
 
                         // Success
                         _connectionState.value = ConnectionState.CONNECTED
@@ -525,6 +544,12 @@ class VpnConnectionManager @Inject constructor(
                                     if (BuildConfig.DEBUG) Log.w(TAG, "Connection appears to have dropped")
                                     logService.logService("Connection lost - initiating auto-reconnect", LogLevel.WARNING)
                                     stopStatsPolling()
+                                    // Release the dropped session's counter slot before reconnecting —
+                                    // attemptReconnect() obtains a fresh session and overwrites the id,
+                                    // so nothing else would ever tell the backend about this one. If
+                                    // the network is genuinely down the call fails and the id stays in
+                                    // the pending-disconnect queue for retry.
+                                    try { vpnRepository.disconnect() } catch (_: Exception) { }
                                     attemptReconnect()
                                     return@launch
                                 }

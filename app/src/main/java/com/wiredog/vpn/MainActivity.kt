@@ -31,8 +31,12 @@ import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
+import androidx.lifecycle.lifecycleScope
 import com.wiredog.vpn.data.remote.api.WireDogApi
+import com.wiredog.vpn.data.repository.AnnouncementRepository
+import com.wiredog.vpn.data.repository.AuthRepository
 import com.wiredog.vpn.data.repository.UpdateAction
+import kotlinx.coroutines.launch
 import com.wiredog.vpn.ui.navigation.BottomNavBar
 import com.wiredog.vpn.ui.navigation.Screen
 import com.wiredog.vpn.ui.navigation.WireDogNavHost
@@ -44,11 +48,18 @@ import com.wiredog.vpn.ui.theme.VpnTextPrimary
 import com.wiredog.vpn.ui.theme.VpnTextSecondary
 import com.wiredog.vpn.ui.theme.WireDogVPNAndroidTheme
 import dagger.hilt.android.AndroidEntryPoint
+import javax.inject.Inject
 
 @AndroidEntryPoint
 class MainActivity : ComponentActivity() {
 
     private val viewModel: MainViewModel by viewModels()
+
+    @Inject
+    lateinit var announcementRepository: AnnouncementRepository
+
+    @Inject
+    lateinit var authRepository: AuthRepository
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -91,6 +102,27 @@ class MainActivity : ComponentActivity() {
                 }
             }
         }
+    }
+
+    override fun onStart() {
+        super.onStart()
+        // Poll for in-app announcements only while the app is foregrounded (parity with the
+        // iOS BroadcastService lifecycle). Single-Activity app, so this is effectively app-wide.
+        announcementRepository.onAppForeground()
+        // Refresh the account profile on every foreground — most notably this is what picks up
+        // a subscription just purchased on the website checkout page (the user pays in a browser,
+        // then switches back; nothing else would tell us their plan changed). Cheap no-op
+        // otherwise. Mirrors the iOS MainTabView scene-phase refresh.
+        lifecycleScope.launch {
+            if (authRepository.isLoggedIn.value) {
+                authRepository.fetchProfile()
+            }
+        }
+    }
+
+    override fun onStop() {
+        super.onStop()
+        announcementRepository.onAppBackground()
     }
 }
 

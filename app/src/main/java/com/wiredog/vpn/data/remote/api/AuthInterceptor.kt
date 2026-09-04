@@ -16,7 +16,8 @@ class AuthInterceptor @Inject constructor(
         val path = originalRequest.url.encodedPath
         if (path.endsWith("auth/login") || path.endsWith("auth/register") ||
             path.endsWith("auth/forgot-password") || path.endsWith("auth/verify-reset-code") ||
-            path.endsWith("auth/reset-password") || path.endsWith("app/config")) {
+            path.endsWith("auth/reset-password") || path.endsWith("app/config") ||
+            path.endsWith("app/announcements")) {
             return chain.proceed(originalRequest)
         }
 
@@ -31,6 +32,12 @@ class AuthInterceptor @Inject constructor(
         }
 
         val response = chain.proceed(newRequest)
+
+        // Sliding session renewal: the backend reissues a fresh token with a renewed expiry on
+        // every authenticated request (X-Refreshed-Token header), so an actively-used app never
+        // hits its token's flat TTL. Persist it whenever present — even on a non-2xx response,
+        // since the token was still valid enough for the backend to make the renewal decision.
+        response.header("X-Refreshed-Token")?.let { secureStorage.saveAuthToken(it) }
 
         // Clear stale token on 401 so the app returns to login state
         if (response.code == 401) {

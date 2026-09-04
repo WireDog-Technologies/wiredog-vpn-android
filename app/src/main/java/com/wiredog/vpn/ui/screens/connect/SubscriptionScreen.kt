@@ -27,12 +27,15 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
+import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.unit.dp
@@ -53,9 +56,11 @@ import com.wiredog.vpn.ui.theme.VpnTextSecondary
 @Composable
 fun SubscriptionScreen(
     onDismiss: () -> Unit,
-    onRetryAfterSubscription: () -> Unit
+    onRetryAfterSubscription: () -> Unit,
+    viewModel: SubscriptionViewModel = hiltViewModel()
 ) {
     val context = LocalContext.current
+    val isResolvingCheckout by viewModel.isResolvingCheckout.collectAsState()
 
     Column(
         modifier = Modifier
@@ -184,19 +189,19 @@ fun SubscriptionScreen(
                     )
                 }
 
-                // Start Subscription button
+                // Start Subscription button — opens checkout with a one-time handoff code so the
+                // already-logged-in user lands straight on checkout instead of the public funnel.
                 GradientActionButton(
                     title = "Start Subscription",
-                    isLoading = false,
-                    isDisabled = false,
+                    isLoading = isResolvingCheckout,
+                    isDisabled = isResolvingCheckout,
                     onClick = {
-                        try {
-                            if (Config.loginURL.isNotEmpty()) {
-                                val intent = Intent(Intent.ACTION_VIEW, Uri.parse(Config.loginURL))
-                                context.startActivity(intent)
+                        viewModel.openCheckout { url ->
+                            try {
+                                context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)))
+                            } catch (e: Exception) {
+                                android.util.Log.e("SubscriptionScreen", "Failed to open checkout", e)
                             }
-                        } catch (e: Exception) {
-                            android.util.Log.e("SubscriptionScreen", "Failed to open URL", e)
                         }
                     },
                     modifier = Modifier.fillMaxWidth()
