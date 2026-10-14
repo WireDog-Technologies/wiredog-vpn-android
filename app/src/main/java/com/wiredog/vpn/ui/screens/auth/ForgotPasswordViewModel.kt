@@ -19,6 +19,10 @@ data class ForgotPasswordUiState(
     val code: String = "",
     val newPassword: String = "",
     val confirmPassword: String = "",
+    // Set by the code-verification step when the account has 2FA on; the reset then also needs a
+    // current authenticator (or recovery) code.
+    val twoFactorRequired: Boolean = false,
+    val twoFactorCode: String = "",
     val isLoading: Boolean = false,
     val error: String? = null
 )
@@ -42,6 +46,11 @@ class ForgotPasswordViewModel @Inject constructor(
     fun onCodeChange(value: String) {
         val sanitized = value.filter { it.isDigit() }.take(6)
         _uiState.update { it.copy(code = sanitized, error = null) }
+    }
+
+    fun onTwoFactorCodeChange(value: String) {
+        val sanitized = value.filter { it.isLetterOrDigit() || it == '-' }.take(15)
+        _uiState.update { it.copy(twoFactorCode = sanitized, error = null) }
     }
 
     fun onNewPasswordChange(value: String) {
@@ -77,7 +86,7 @@ class ForgotPasswordViewModel @Inject constructor(
         viewModelScope.launch {
             _uiState.update { it.copy(isLoading = true, error = null) }
             authRepository.verifyResetCode(state.email, state.code)
-                .onSuccess { _uiState.update { it.copy(isLoading = false, step = ForgotPasswordStep.RESET_PASSWORD) } }
+                .onSuccess { required -> _uiState.update { it.copy(isLoading = false, twoFactorRequired = required, step = ForgotPasswordStep.RESET_PASSWORD) } }
                 .onFailure { _uiState.update { it.copy(isLoading = false, error = "Invalid or expired code") } }
         }
     }
@@ -92,9 +101,16 @@ class ForgotPasswordViewModel @Inject constructor(
             _uiState.update { it.copy(error = "Passwords do not match") }
             return
         }
+        if (state.twoFactorRequired && state.twoFactorCode.isBlank()) {
+            _uiState.update { it.copy(error = "Enter your authenticator or recovery code") }
+            return
+        }
         viewModelScope.launch {
             _uiState.update { it.copy(isLoading = true, error = null) }
-            authRepository.resetPassword(state.email, state.code, state.newPassword)
+            authRepository.resetPassword(
+                state.email, state.code, state.newPassword,
+                twoFactorCode = state.twoFactorCode.takeIf { state.twoFactorRequired }
+            )
                 .onSuccess { _uiState.update { it.copy(isLoading = false, step = ForgotPasswordStep.DONE) } }
                 .onFailure { _uiState.update { it.copy(isLoading = false, error = "Password reset failed. Please try again.") } }
         }

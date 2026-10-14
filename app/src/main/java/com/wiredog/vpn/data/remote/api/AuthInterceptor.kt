@@ -16,7 +16,9 @@ class AuthInterceptor @Inject constructor(
         val path = originalRequest.url.encodedPath
         if (path.endsWith("auth/login") || path.endsWith("auth/register") ||
             path.endsWith("auth/forgot-password") || path.endsWith("auth/verify-reset-code") ||
-            path.endsWith("auth/reset-password") || path.endsWith("app/config") ||
+            path.endsWith("auth/reset-password") || path.endsWith("auth/2fa/verify") ||
+            path.endsWith("auth/login/lookup") || path.endsWith("auth/sso/exchange") ||
+            path.endsWith("app/config") ||
             path.endsWith("app/announcements")) {
             return chain.proceed(originalRequest)
         }

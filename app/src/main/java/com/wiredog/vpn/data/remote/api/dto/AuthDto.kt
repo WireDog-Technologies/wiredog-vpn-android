@@ -16,8 +16,43 @@ data class AnonymousLoginRequest(
 
 @JsonClass(generateAdapter = true)
 data class LoginResponse(
-    @Json(name = "token") val token: String,
-    @Json(name = "user") val user: UserProfileDto? = null
+    // Absent when the account has 2FA on: the response is then a challenge to redeem at
+    // auth/2fa/verify instead of a session.
+    @Json(name = "token") val token: String? = null,
+    @Json(name = "user") val user: UserProfileDto? = null,
+    @Json(name = "requiresTwoFactor") val requiresTwoFactor: Boolean = false,
+    @Json(name = "challengeToken") val challengeToken: String? = null
+)
+
+@JsonClass(generateAdapter = true)
+data class TwoFactorVerifyRequest(
+    @Json(name = "challengeToken") val challengeToken: String,
+    // A 6-digit authenticator code or a recovery code; the backend accepts either.
+    @Json(name = "code") val code: String
+)
+
+@JsonClass(generateAdapter = true)
+data class SsoLookupResponse(
+    @Json(name = "sso") val sso: Boolean = false,
+    @Json(name = "domain") val domain: String? = null
+)
+
+@JsonClass(generateAdapter = true)
+data class SsoExchangeRequest(
+    @Json(name = "code") val code: String,
+    @Json(name = "codeVerifier") val codeVerifier: String
+)
+
+@JsonClass(generateAdapter = true)
+data class ChangePasswordRequest(
+    @Json(name = "currentPassword") val currentPassword: String,
+    @Json(name = "newPassword") val newPassword: String
+)
+
+@JsonClass(generateAdapter = true)
+data class VerifyResetCodeResponse(
+    // True when the account has 2FA on: the reset itself must then carry a current 2FA code.
+    @Json(name = "twoFactorRequired") val twoFactorRequired: Boolean? = null
 )
 
 @JsonClass(generateAdapter = true)
@@ -27,7 +62,16 @@ data class UserProfileDto(
     @Json(name = "accountNumber") val accountNumber: String?,
     @Json(name = "accountType") val accountType: String,
     @Json(name = "planTier") val planTier: String?,
-    @Json(name = "subscriptionExpiresAt") val subscriptionExpiresAt: String?
+    @Json(name = "subscriptionExpiresAt") val subscriptionExpiresAt: String?,
+    // Business/organization state from auth/me. All defaulted so an older backend still decodes.
+    @Json(name = "isActive") val isActive: Boolean = false,
+    @Json(name = "totpEnabled") val totpEnabled: Boolean = false,
+    @Json(name = "twoFactorRequiredByOrg") val twoFactorRequiredByOrg: Boolean = false,
+    @Json(name = "mustChangePassword") val mustChangePassword: Boolean = false,
+    @Json(name = "subscriptionManagedByOrganization") val subscriptionManagedByOrganization: Boolean = false,
+    @Json(name = "organizationName") val organizationName: String? = null,
+    @Json(name = "organizationRole") val organizationRole: String? = null,
+    @Json(name = "organizationAccess") val organizationAccess: String? = null
 )
 
 @JsonClass(generateAdapter = true)
@@ -84,7 +128,8 @@ data class VerifyResetCodeRequest(
 data class ResetPasswordRequest(
     @Json(name = "email") val email: String,
     @Json(name = "code") val code: String,
-    @Json(name = "newPassword") val newPassword: String
+    @Json(name = "newPassword") val newPassword: String,
+    @Json(name = "twoFactorCode") val twoFactorCode: String? = null
 )
 
 @JsonClass(generateAdapter = true)
@@ -106,4 +151,11 @@ data class ReportBugRequest(
 data class ReportBugResponse(
     @Json(name = "message") val message: String,
     @Json(name = "issueId") val issueId: Int
+)
+
+@JsonClass(generateAdapter = true)
+data class MilestoneRequest(
+    @Json(name = "key") val key: String,
+    // Without this the backend counts the milestone as iOS.
+    @Json(name = "platform") val platform: String = "Android"
 )

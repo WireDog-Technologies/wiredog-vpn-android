@@ -4,6 +4,7 @@ import com.wiredog.vpn.data.local.keystore.SecureStorage
 import com.wiredog.vpn.data.logging.LogLevel
 import com.wiredog.vpn.data.logging.LogService
 import com.wiredog.vpn.data.remote.api.WireDogApi
+import com.wiredog.vpn.data.remote.api.toApiError
 import com.wiredog.vpn.data.remote.api.dto.ConnectRequest
 import com.wiredog.vpn.data.remote.api.dto.ConnectResponse
 import com.wiredog.vpn.data.remote.api.dto.DisconnectRequest
@@ -37,7 +38,8 @@ class VpnRepository @Inject constructor(
     suspend fun connect(
         serverId: String,
         blockAds: Boolean = true,
-        blockMalware: Boolean = true
+        blockMalware: Boolean = true,
+        dedicatedIpId: Int? = null
     ): Result<ConnectResponse> {
         return try {
             // NonCancellable: the backend creates the session (and increments the device
@@ -50,7 +52,7 @@ class VpnRepository @Inject constructor(
             // cancellation right after this returns and runs its cleanup, which calls
             // disconnect() for this exact id.
             val response = withContext(NonCancellable) {
-                val r = api.vpnConnect(ConnectRequest(serverId, blockAds, blockMalware))
+                val r = api.vpnConnect(ConnectRequest(serverId, blockAds, blockMalware, dedicatedIpId))
                 currentSessionId = r.sessionId
                 secureStorage.saveSessionId(r.sessionId)
                 r
@@ -64,14 +66,27 @@ class VpnRepository @Inject constructor(
     }
 
     private fun mapConnectError(e: HttpException): Exception {
+        val error = e.toApiError()
         // The backend returns 429 both for real rate-limiting and for the 5-device connection
         // cap — tell them apart by the error message so a rate-limit isn't misreported as a
         // device cap (matches the iOS client).
-        if (e.code() == 429) {
-            val body = try { e.response()?.errorBody()?.string() } catch (_: Exception) { null }
-            if (body != null && body.contains("Connection limit exceeded")) {
-                return VpnConnectException(
-                    "You've reached your 5-device connection limit. Disconnect another device to continue."
+        if (error?.status == 429 && error.message?.contains("Connection limit exceeded") == true) {
+            return VpnConnectException(
+                "You've reached your 5-device connection limit. Disconnect another device to continue."
+            )
+        }
+        // Some 403s carry a machine-readable `code` so the app can say something specific
+        // instead of a generic failure. A plain 403 stays generic.
+        if (error?.status == 403) {
+            when (error.code) {
+                "two_factor_setup_required" -> return VpnConnectException(
+                    "Your organization requires two-factor authentication. Set it up on your dashboard, then try again."
+                )
+                "server_not_available" -> return VpnConnectException(
+                    "Your organization does not have access to this location."
+                )
+                "subscription_required" -> return VpnConnectException(
+                    "An active subscription is required to connect."
                 )
             }
         }

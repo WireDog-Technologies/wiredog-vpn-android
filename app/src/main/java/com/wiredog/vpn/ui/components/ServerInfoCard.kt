@@ -61,14 +61,14 @@ fun ServerInfoCard(
 
                 Column(modifier = Modifier.weight(1f)) {
                     Text(
-                        text = server.state,
+                        text = server.gatewayName ?: server.state,
                         fontSize = 16.sp,
                         fontWeight = FontWeight.SemiBold,
                         color = VpnTextPrimary
                     )
                     if (server.city.isNotBlank()) {
                         Text(
-                            text = server.city,
+                            text = if (server.isDedicated) "${server.city}, ${server.stateCode}" else server.city,
                             fontSize = 12.sp,
                             color = VpnTextSecondary
                         )
@@ -77,12 +77,12 @@ fun ServerInfoCard(
 
                 Column(horizontalAlignment = Alignment.End) {
                     Text(
-                        text = "Server ID",
+                        text = if (server.isDedicated) "Type" else "Server ID",
                         fontSize = 16.sp,
                         color = VpnTextSecondary
                     )
                     Text(
-                        text = server.id,
+                        text = if (server.isDedicated) "Dedicated" else server.id,
                         fontSize = 14.sp,
                         fontFamily = IosevkaTermExtended,
                         color = VpnPrimary

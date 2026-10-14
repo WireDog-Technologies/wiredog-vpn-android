@@ -129,13 +129,13 @@ private fun ServerHeaderCard(
 
             Column {
                 Text(
-                    text = server.state,
+                    text = server.gatewayName ?: server.state,
                     fontSize = 20.sp,
                     fontWeight = FontWeight.Bold,
                     color = VpnTextPrimary
                 )
                 Text(
-                    text = server.id,
+                    text = if (server.isDedicated) "Dedicated gateway" else server.id,
                     fontSize = 14.sp,
                     fontFamily = FontFamily.Monospace,
                     color = VpnPrimary
@@ -213,8 +213,8 @@ private fun ConnectionDetailsCard(
             DetailDivider()
 
             DetailRow(
-                label = "Server",
-                value = server.id
+                label = if (server.isDedicated) "Gateway" else "Server",
+                value = server.gatewayName ?: server.id
             )
 
             DetailDivider()

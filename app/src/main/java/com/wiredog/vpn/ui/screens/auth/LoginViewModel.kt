@@ -4,14 +4,18 @@ import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.wiredog.vpn.data.remote.api.toApiError
+import com.wiredog.vpn.data.repository.AuthException
 import com.wiredog.vpn.data.repository.AuthRepository
+import com.wiredog.vpn.data.repository.LoginOutcome
+import com.wiredog.vpn.data.repository.SsoManager
 import dagger.hilt.android.lifecycle.HiltViewModel
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
-import retrofit2.HttpException
 import javax.inject.Inject
 
 data class LoginUiState(
@@ -24,16 +28,40 @@ data class LoginUiState(
     // Anonymous login field
     val accountNumber: TextFieldValue = TextFieldValue(""),
     // Tab selection
-    val selectedTabIndex: Int = 0
+    val selectedTabIndex: Int = 0,
+    // One-shot events consumed by the screen
+    val ssoUrlToLaunch: String? = null,
+    val navigateToTwoFactor: Boolean = false
 )
 
 @HiltViewModel
 class LoginViewModel @Inject constructor(
-    private val authRepository: AuthRepository
+    private val authRepository: AuthRepository,
+    private val ssoManager: SsoManager
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(LoginUiState())
     val uiState: StateFlow<LoginUiState> = _uiState.asStateFlow()
+
+    // An SSO sign-in is waiting on the browser; leftApp flips once the browser actually took focus.
+    private var ssoInFlight = false
+    private var ssoLeftApp = false
+
+    init {
+        viewModelScope.launch {
+            ssoManager.callbacks.collect { callback ->
+                when (callback) {
+                    is SsoManager.Callback.Code -> {
+                        authRepository.exchangeSsoCode(callback.code, callback.codeVerifier)
+                            .onSuccess { finishSso(success = true) }
+                            .onFailure { e -> finishSso(error = getErrorMessage(e, isAnonymous = false)) }
+                    }
+                    SsoManager.Callback.NoAccount -> finishSso(error = AuthException.ssoNoAccount().message)
+                    SsoManager.Callback.Failed -> finishSso(error = AuthException.ssoFailed().message)
+                }
+            }
+        }
+    }
 
     fun onEmailChange(email: String) {
         val sanitized = email
@@ -99,10 +127,16 @@ class LoginViewModel @Inject constructor(
         viewModelScope.launch {
             _uiState.update { it.copy(isLoading = true, error = null) }
 
+            // SSO members have no password, so a password attempt on an SSO domain could only ever
+            // fail with "Invalid credentials". Check first and route them to SSO instead. A failed
+            // lookup counts as "no SSO", so a network blip never blocks password login.
+            if (authRepository.ssoAvailable(state.email)) {
+                beginSso(state.email)
+                return@launch
+            }
+
             authRepository.loginStandard(state.email, state.password)
-                .onSuccess {
-                    _uiState.update { it.copy(isLoading = false, isLoginSuccess = true) }
-                }
+                .onSuccess { handle(it) }
                 .onFailure { e ->
                     _uiState.update {
                         it.copy(
@@ -132,9 +166,7 @@ class LoginViewModel @Inject constructor(
 
             val cleanAccountNumber = accountText.replace(Regex("[\\s-]"), "")
             authRepository.loginAnonymous(cleanAccountNumber)
-                .onSuccess {
-                    _uiState.update { it.copy(isLoading = false, isLoginSuccess = true) }
-                }
+                .onSuccess { handle(it) }
                 .onFailure { e ->
                     _uiState.update {
                         it.copy(
@@ -143,6 +175,88 @@ class LoginViewModel @Inject constructor(
                         )
                     }
                 }
+        }
+    }
+
+    /** A signed-in outcome just flips success; only the 2FA challenge needs another screen. */
+    private fun handle(outcome: LoginOutcome) {
+        when (outcome) {
+            is LoginOutcome.SignedIn ->
+                _uiState.update { it.copy(isLoading = false, isLoginSuccess = true) }
+            is LoginOutcome.TwoFactorRequired ->
+                _uiState.update { it.copy(isLoading = false, navigateToTwoFactor = true) }
+        }
+    }
+
+    fun onTwoFactorNavigated() {
+        _uiState.update { it.copy(navigateToTwoFactor = false) }
+    }
+
+    // SSO
+
+    /** The login screen goes straight to SSO only when the email field already holds an email. */
+    fun hasValidEmail(): Boolean = isValidEmail(_uiState.value.email)
+
+    /** Starts SSO for the typed email: it must be an email whose domain has SSO set up. */
+    fun signInWithSso() {
+        val email = _uiState.value.email
+        if (!isValidEmail(email)) {
+            _uiState.update { it.copy(error = "Enter a valid work email address") }
+            return
+        }
+        viewModelScope.launch {
+            _uiState.update { it.copy(isLoading = true, error = null) }
+            if (!authRepository.ssoAvailable(email)) {
+                _uiState.update { it.copy(isLoading = false, error = AuthException.ssoNotAvailable().message) }
+                return@launch
+            }
+            beginSso(email)
+        }
+    }
+
+    private fun beginSso(email: String) {
+        val domain = email.substringAfter('@').lowercase()
+        val url = ssoManager.begin(domain)
+        ssoInFlight = true
+        ssoLeftApp = false
+        _uiState.update { it.copy(ssoUrlToLaunch = url) }
+    }
+
+    fun onSsoLaunched() {
+        _uiState.update { it.copy(ssoUrlToLaunch = null) }
+    }
+
+    /** No browser could open the sign-in page. */
+    fun onSsoLaunchFailed() {
+        ssoManager.cancel()
+        finishSso(error = AuthException.ssoFailed().message)
+    }
+
+    private fun finishSso(success: Boolean = false, error: String? = null) {
+        ssoInFlight = false
+        ssoLeftApp = false
+        _uiState.update { it.copy(isLoading = false, isLoginSuccess = success, error = error) }
+    }
+
+    /** Called from the screen's lifecycle: the browser (or anything else) took focus. */
+    fun onScreenPaused() {
+        if (ssoInFlight) ssoLeftApp = true
+    }
+
+    /**
+     * Custom Tabs give no cancel callback, so coming back to the app with no callback is treated
+     * as the user closing the tab. A real callback arrives (via onNewIntent) just before resume,
+     * so wait a moment for it before declaring a cancel.
+     */
+    fun onScreenResumed() {
+        if (!ssoInFlight || !ssoLeftApp) return
+        ssoLeftApp = false
+        viewModelScope.launch {
+            delay(1500)
+            if (ssoInFlight && !ssoLeftApp) {
+                ssoManager.cancel()
+                finishSso(error = AuthException.ssoCancelled().message)
+            }
         }
     }
 
@@ -155,16 +269,20 @@ class LoginViewModel @Inject constructor(
     }
 
     private fun getErrorMessage(exception: Throwable, isAnonymous: Boolean): String {
+        if (exception is AuthException) return exception.message ?: GENERIC_ERROR
+        val apiError = exception.toApiError()
         return when {
-            exception is HttpException -> {
-                when (exception.code()) {
-                    400 -> "Bad Request"
-                    401 -> if (isAnonymous) "Account number not found" else "Invalid email or password"
-                    403 -> "Forbidden"
-                    else -> "An error occurred. Please try again later."
-                }
+            apiError != null -> when (apiError.status) {
+                400 -> apiError.message ?: "Bad Request"
+                401 -> if (isAnonymous) "Account number not found" else "Invalid email or password"
+                403 -> apiError.message ?: "Forbidden"
+                else -> apiError.message ?: GENERIC_ERROR
             }
-            else -> "An error occurred. Please try again later."
+            else -> GENERIC_ERROR
         }
+    }
+
+    private companion object {
+        const val GENERIC_ERROR = "An error occurred. Please try again later."
     }
 }

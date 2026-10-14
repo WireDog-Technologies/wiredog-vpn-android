@@ -36,17 +36,21 @@ android {
         applicationId = "com.wiredog.vpn"
         minSdk = 28
         targetSdk = 36
-        versionCode = 10
-        versionName = "1.3.0"
+        versionCode = 11
+        versionName = "1.4.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
         buildConfigField("String", "WIREDOG_API_BASE_URL", "\"https://api.wiredogvpn.com/api\"")
         buildConfigField("String", "WIREDOG_URL_DASHBOARD", "\"https://www.wiredogvpn.com/dashboard\"")
+        buildConfigField("String", "WIREDOG_URL_DASHBOARD_HANDOFF", "\"https://www.wiredogvpn.com/dashboard\"")
         buildConfigField("String", "WIREDOG_URL_PRIVACY", "\"https://www.wiredogvpn.com/legal/privacy\"")
         buildConfigField("String", "WIREDOG_URL_TERMS", "\"https://www.wiredogvpn.com/legal/terms-of-service\"")
         buildConfigField("String", "WIREDOG_URL_GET_STARTED", "\"https://www.wiredogvpn.com/get-started\"")
         buildConfigField("String", "WIREDOG_URL_CHECKOUT", "\"https://www.wiredogvpn.com/checkout\"")
+        buildConfigField("String", "WIREDOG_URL_PRICING", "\"https://www.wiredogvpn.com/#pricing\"")
+        buildConfigField("String", "WIREDOG_URL_LOGIN", "\"https://www.wiredogvpn.com/login\"")
+        buildConfigField("String", "WIREDOG_URL_SUPPORT", "\"https://www.wiredogvpn.com/help\"")
         buildConfigField("String", "WIREDOG_APP_STORE_URL", "\"https://play.google.com/store/apps/details?id=com.wiredog.vpn\"")
     }
 
@@ -56,6 +60,15 @@ android {
             // from the IDE hits the integration backend automatically. Release builds
             // (APK/bundle) use the production URL from defaultConfig instead.
             buildConfigField("String", "WIREDOG_API_BASE_URL", "\"https://intapi.wiredogvpn.com/api\"")
+            // Web pages that talk to the API (checkout and dashboard redeem a handoff code minted
+            // by it) must be the same environment. Privacy and Terms stay on production.
+            buildConfigField("String", "WIREDOG_URL_DASHBOARD", "\"https://int.wiredogvpn.com/dashboard\"")
+            buildConfigField("String", "WIREDOG_URL_DASHBOARD_HANDOFF", "\"https://int.wiredogvpn.com/dashboard\"")
+            buildConfigField("String", "WIREDOG_URL_GET_STARTED", "\"https://int.wiredogvpn.com/get-started\"")
+            buildConfigField("String", "WIREDOG_URL_CHECKOUT", "\"https://int.wiredogvpn.com/checkout\"")
+            buildConfigField("String", "WIREDOG_URL_PRICING", "\"https://int.wiredogvpn.com/#pricing\"")
+            buildConfigField("String", "WIREDOG_URL_LOGIN", "\"https://int.wiredogvpn.com/login\"")
+            buildConfigField("String", "WIREDOG_URL_SUPPORT", "\"https://int.wiredogvpn.com/help\"")
         }
         release {
             signingConfig = signingConfigs.getByName("release")
@@ -147,6 +160,9 @@ dependencies {
 
     // Accompanist
     implementation(libs.accompanist.drawablepainter)
+
+    // Custom Tabs (SSO sign-in)
+    implementation(libs.androidx.browser)
 
     // Coroutines
     implementation(libs.coroutines.android)

@@ -4,6 +4,8 @@ import android.content.Intent
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.wiredog.vpn.data.repository.AuthRepository
+import com.wiredog.vpn.data.repository.Milestone
+import com.wiredog.vpn.data.repository.MilestoneService
 import com.wiredog.vpn.data.repository.ServerRepository
 import com.wiredog.vpn.domain.model.ConnectionState
 import com.wiredog.vpn.domain.model.Server
@@ -40,7 +42,8 @@ data class ServersUiState(
 class ServersViewModel @Inject constructor(
     private val serverRepository: ServerRepository,
     private val vpnConnectionManager: VpnConnectionManager,
-    private val authRepository: AuthRepository
+    private val authRepository: AuthRepository,
+    private val milestoneService: MilestoneService
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(ServersUiState())
@@ -62,6 +65,7 @@ class ServersViewModel @Inject constructor(
             filtered = filtered.filter { server ->
                 server.state.lowercase().contains(query) ||
                 server.city.lowercase().contains(query) ||
+                (server.gatewayName?.lowercase()?.contains(query) ?: false) ||
                 server.stateCode.lowercase().contains(query)
             }
         }
@@ -105,10 +109,13 @@ class ServersViewModel @Inject constructor(
      * disconnected values stay on screen otherwise, and a fresh sweep runs on disconnect.
      */
     private fun measureLatenciesIfDisconnected() {
-        if (vpnConnectionManager.connectionState.value == ConnectionState.DISCONNECTED) {
-            viewModelScope.launch { serverRepository.measureAndUpdateLatencies() }
+        if (isDisconnected()) {
+            viewModelScope.launch { serverRepository.measureAndUpdateLatencies(::isDisconnected) }
         }
     }
+
+    private fun isDisconnected() =
+        vpnConnectionManager.connectionState.value == ConnectionState.DISCONNECTED
 
     private fun observeConnectionForLatency() {
         viewModelScope.launch {
@@ -116,7 +123,7 @@ class ServersViewModel @Inject constructor(
             vpnConnectionManager.connectionState.collect { state ->
                 val connected = state != ConnectionState.DISCONNECTED
                 if (wasConnected && !connected) {
-                    serverRepository.measureAndUpdateLatencies()
+                    serverRepository.measureAndUpdateLatencies(::isDisconnected)
                 }
                 wasConnected = connected
             }
@@ -128,8 +135,16 @@ class ServersViewModel @Inject constructor(
             _uiState.update { it.copy(isLoading = true, error = null) }
 
             serverRepository.fetchServers()
-                .onSuccess {
-                    _uiState.update { it.copy(isLoading = false) }
+                .onSuccess { servers ->
+                    // The public fleet is never empty, so an empty list for a signed-in account
+                    // means a business plan restricted to the organization's own network with
+                    // no location set up.
+                    _uiState.update {
+                        it.copy(
+                            isLoading = false,
+                            error = if (servers.isEmpty()) "No locations are available for your account yet. If you are on a business plan, contact your organization's administrator." else null
+                        )
+                    }
                     serverRepository.restoreSelectedServer()
                     measureLatenciesIfDisconnected()
                 }
@@ -222,8 +237,14 @@ class ServersViewModel @Inject constructor(
             authRepository.resetConnections()
             authRepository.fetchProfile()
             val user = authRepository.currentUser.value
-            if (user != null && !user.isSubscriptionActive) {
-                _uiState.update { it.copy(needsSubscription = true, pendingServer = server) }
+            if (user != null && !user.hasEntitlement) {
+                val lost = user.lostOrganizationAccess
+                if (lost != null) {
+                    _uiState.update { it.copy(connectError = lost.userMessage) }
+                } else {
+                    milestoneService.record(Milestone.CONNECT_ATTEMPTED)
+                    _uiState.update { it.copy(needsSubscription = true, pendingServer = server) }
+                }
                 return
             }
         } catch (e: Exception) {

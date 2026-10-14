@@ -77,6 +77,22 @@ class ProfileViewModel @Inject constructor(
         }
     }
 
+    private var isOpeningDashboard = false
+
+    /**
+     * Opens the website dashboard already signed in via a one-time handoff code. Falls back to the
+     * plain dashboard URL (which asks the user to sign in) if the code can't be minted.
+     */
+    fun openDashboard(onUrl: (String) -> Unit) {
+        if (isOpeningDashboard) return
+        isOpeningDashboard = true
+        viewModelScope.launch {
+            val url = authRepository.dashboardHandoffUrl()
+            isOpeningDashboard = false
+            onUrl(url)
+        }
+    }
+
     fun signOut(onComplete: () -> Unit) {
         viewModelScope.launch {
             _uiState.value = _uiState.value.copy(isSigningOut = true)

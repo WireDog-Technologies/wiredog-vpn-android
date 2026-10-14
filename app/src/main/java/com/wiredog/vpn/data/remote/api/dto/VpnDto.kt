@@ -7,7 +7,10 @@ import com.squareup.moshi.JsonClass
 data class ConnectRequest(
     @Json(name = "serverId") val serverId: String,
     @Json(name = "blockAds") val blockAds: Boolean = true,
-    @Json(name = "blockMalware") val blockMalware: Boolean = true
+    @Json(name = "blockMalware") val blockMalware: Boolean = true,
+    // Which of the organization's named Dedicated IP gateways was picked. Omitted (null) for
+    // the shared network.
+    @Json(name = "dedicatedIpId") val dedicatedIpId: Int? = null
 )
 
 @JsonClass(generateAdapter = true)

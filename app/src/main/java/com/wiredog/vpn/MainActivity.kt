@@ -1,5 +1,6 @@
 package com.wiredog.vpn
 
+import android.content.Intent
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -35,12 +36,15 @@ import androidx.lifecycle.lifecycleScope
 import com.wiredog.vpn.data.remote.api.WireDogApi
 import com.wiredog.vpn.data.repository.AnnouncementRepository
 import com.wiredog.vpn.data.repository.AuthRepository
+import com.wiredog.vpn.data.repository.SsoManager
 import com.wiredog.vpn.data.repository.UpdateAction
 import kotlinx.coroutines.launch
 import com.wiredog.vpn.ui.navigation.BottomNavBar
 import com.wiredog.vpn.ui.navigation.Screen
 import com.wiredog.vpn.ui.navigation.WireDogNavHost
+import com.wiredog.vpn.ui.screens.auth.ForcedPasswordChangeScreen
 import com.wiredog.vpn.ui.screens.auth.PrivacyDisclosureView
+import com.wiredog.vpn.ui.screens.auth.TwoFactorSetupRequiredScreen
 import com.wiredog.vpn.ui.theme.VpnBackground
 import com.wiredog.vpn.ui.theme.VpnPrimary
 import com.wiredog.vpn.ui.theme.VpnRedBright
@@ -61,18 +65,25 @@ class MainActivity : ComponentActivity() {
     @Inject
     lateinit var authRepository: AuthRepository
 
+    @Inject
+    lateinit var ssoManager: SsoManager
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         setContent {
             WireDogVPNAndroidTheme {
                 val uiState by viewModel.uiState.collectAsStateWithLifecycle()
+                val user by viewModel.currentUser.collectAsStateWithLifecycle()
 
                 when {
                     uiState.isLoading -> LoadingScreen()
 
                     uiState.showPrivacyDisclosure -> {
                         PrivacyDisclosureView(
+                            pending = uiState.pendingLegal,
+                            isUpdate = uiState.isLegalUpdate,
+                            summary = uiState.legalSummary,
                             onAccept = viewModel::acceptPrivacyDisclosure
                         )
                     }
@@ -80,6 +91,15 @@ class MainActivity : ComponentActivity() {
                     uiState.updateAction is UpdateAction.Maintenance -> MaintenanceScreen()
 
                     uiState.updateAction is UpdateAction.ForceUpdate -> ForceUpdateScreen()
+
+                    // Business accounts can be gated before the app opens. Same order as the
+                    // website dashboard: replace the temporary password first, then the
+                    // org-required 2FA setup.
+                    uiState.isLoggedIn && user?.mustChangePassword == true ->
+                        ForcedPasswordChangeScreen(onSignOut = viewModel::onLogout)
+
+                    uiState.isLoggedIn && user?.let { it.twoFactorRequiredByOrg && !it.totpEnabled } == true ->
+                        TwoFactorSetupRequiredScreen(onSignOut = viewModel::onLogout)
 
                     else -> {
                         // Show main content with optional soft update dialog
@@ -104,11 +124,19 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    // singleTop: the SSO redirect (wiredog://sso) re-enters the running activity here.
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        intent.data?.let { ssoManager.handleCallback(it) }
+    }
+
     override fun onStart() {
         super.onStart()
         // Poll for in-app announcements only while the app is foregrounded (parity with the
         // iOS BroadcastService lifecycle). Single-Activity app, so this is effectively app-wide.
         announcementRepository.onAppForeground()
+        // Pick up a legal-version bump without waiting for a cold launch.
+        viewModel.onForeground()
         // Refresh the account profile on every foreground — most notably this is what picks up
         // a subscription just purchased on the website checkout page (the user pays in a browser,
         // then switches back; nothing else would tell us their plan changed). Cheap no-op

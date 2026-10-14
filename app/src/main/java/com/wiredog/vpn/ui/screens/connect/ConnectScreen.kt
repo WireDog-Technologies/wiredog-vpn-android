@@ -35,6 +35,7 @@ import androidx.lifecycle.compose.LocalLifecycleOwner
 import android.view.HapticFeedbackConstants
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CallSplit
+import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material3.Icon
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -210,10 +211,14 @@ fun ConnectScreen(
                 }
             }
 
-            ConnectionTimeCard(
-                connectionStartTime = uiState.connectionStartTime,
-                isConnected = uiState.connectionState == ConnectionState.CONNECTED
-            )
+            if (uiState.showUpgradeCard) {
+                UpgradeCard(onClick = viewModel::presentPaywall)
+            } else {
+                ConnectionTimeCard(
+                    connectionStartTime = uiState.connectionStartTime,
+                    isConnected = uiState.connectionState == ConnectionState.CONNECTED
+                )
+            }
 
             Spacer(modifier = Modifier.height(16.dp))
 
@@ -415,5 +420,44 @@ private fun ConnectionTimeCard(
                 startTimeMillis = if (isConnected) connectionStartTime else null
             )
         }
+    }
+}
+
+// Replaces the connection-time card for accounts with no active plan. The whole card is the
+// button; the chevron is the tap affordance.
+@Composable
+private fun UpgradeCard(
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    Row(
+        modifier = modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(12.dp))
+            .background(VpnCardBackground)
+            .clickable(onClick = onClick)
+            .padding(16.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                text = "Get a WireDog VPN",
+                fontSize = 18.sp,
+                fontWeight = FontWeight.SemiBold,
+                color = VpnTextPrimary
+            )
+            Spacer(modifier = Modifier.height(4.dp))
+            Text(
+                text = "Choose your plan",
+                fontSize = 14.sp,
+                color = VpnTextSecondary
+            )
+        }
+        Icon(
+            imageVector = Icons.Default.ChevronRight,
+            contentDescription = null,
+            tint = VpnTextSecondary,
+            modifier = Modifier.size(20.dp)
+        )
     }
 }

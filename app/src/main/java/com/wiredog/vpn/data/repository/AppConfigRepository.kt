@@ -6,6 +6,10 @@ import com.wiredog.vpn.data.logging.LogLevel
 import com.wiredog.vpn.data.logging.LogService
 import com.wiredog.vpn.data.remote.api.WireDogApi
 import com.wiredog.vpn.data.remote.api.dto.AppConfigResponse
+import com.wiredog.vpn.data.remote.api.dto.LegalVersions
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -25,8 +29,19 @@ class AppConfigRepository @Inject constructor(
 ) {
     private val adapter = moshi.adapter(AppConfigResponse::class.java)
 
+    // Latest published legal versions; null until a config (network or cache) has been loaded,
+    // or when the backend has none configured.
+    private val _legal = MutableStateFlow<LegalVersions?>(null)
+    val legal: StateFlow<LegalVersions?> = _legal.asStateFlow()
+
+    /** Re-fetches the config just to pick up a legal-version bump without a cold launch. */
+    suspend fun refreshLegal() {
+        fetchConfig()?.let { _legal.value = it.legal }
+    }
+
     suspend fun fetchAndEvaluate(currentVersionCode: Int): UpdateAction {
         val config = fetchConfig()
+        _legal.value = config?.legal
         return if (config != null) {
             evaluateConfig(config, currentVersionCode)
         } else {

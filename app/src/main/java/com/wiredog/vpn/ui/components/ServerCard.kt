@@ -73,7 +73,7 @@ fun ServerCard(
 
         Column(modifier = Modifier.weight(1f)) {
             Text(
-                text = server.state,
+                text = server.gatewayName ?: server.state,
                 fontSize = 16.sp,
                 fontWeight = FontWeight.SemiBold,
                 color = VpnTextPrimary,
@@ -82,7 +82,7 @@ fun ServerCard(
             if (server.city.isNotBlank()) {
                 Spacer(modifier = Modifier.height(1.dp))
                 Text(
-                    text = server.city,
+                    text = if (server.isDedicated) "${server.city}, ${server.stateCode}" else server.city,
                     fontSize = 13.sp,
                     color = VpnTextSecondary,
                     style = TextStyle(platformStyle = PlatformTextStyle(includeFontPadding = false))
@@ -207,14 +207,14 @@ fun ServerSubItem(
     ) {
         Column(modifier = Modifier.weight(1f)) {
             Text(
-                text = server.city,
+                text = server.gatewayName ?: server.city,
                 fontSize = 13.sp,
                 fontWeight = FontWeight.Medium,
                 color = VpnTextPrimary,
                 style = TextStyle(platformStyle = PlatformTextStyle(includeFontPadding = false))
             )
             Text(
-                text = server.id,
+                text = if (server.isDedicated) "DEDICATED GATEWAY \u00B7 ${server.city}" else server.id,
                 fontSize = 11.sp,
                 color = VpnTextSecondary,
                 style = TextStyle(platformStyle = PlatformTextStyle(includeFontPadding = false))

@@ -2,7 +2,7 @@ package com.wiredog.vpn.ui.screens.settings
 
 import android.content.Intent
 import android.net.Uri
-import com.wiredog.vpn.data.config.Config
+import com.wiredog.vpn.domain.model.OrganizationAccess
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -246,28 +246,51 @@ fun ProfileScreen(
 
         ProfileCard {
             val isActive = currentUser?.isSubscriptionActive ?: false
+            // Organization seats are paid for and managed by the employer: the plan row says so
+            // instead of showing a personal renewal countdown.
+            val organizationName = currentUser
+                ?.takeIf { it.subscriptionManagedByOrganization }
+                ?.let { it.organizationName ?: "your organization" }
+            // Set when an organization used to cover this account and no longer does.
+            val accessLostText = when (currentUser?.lostOrganizationAccess) {
+                OrganizationAccess.INACTIVE -> "Organization plan inactive"
+                OrganizationAccess.REVOKED -> "Organization access removed"
+                else -> null
+            }
             ProfileInfoRow(
                 icon = Icons.Default.Star,
                 iconTint = VpnYellow,
                 label = "Plan",
-                value = if (isActive) "Active & Paid" else "Not Active",
-                valueColor = if (isActive) VpnTextPrimary else VpnRed
-            )
-
-            ProfileDivider()
-
-            val daysRemaining = currentUser?.daysRemaining ?: 0
-            ProfileInfoRow(
-                icon = Icons.Default.CalendarMonth,
-                iconTint = VpnGreen,
-                label = "Days Remaining",
-                value = if (isActive) "$daysRemaining days" else "Expired",
+                value = when {
+                    accessLostText != null -> accessLostText
+                    organizationName != null -> "Covered by $organizationName"
+                    isActive -> "Active & Paid"
+                    else -> "Not Active"
+                },
                 valueColor = when {
-                    !isActive -> VpnRed
-                    daysRemaining <= 7 -> VpnYellow
-                    else -> VpnTextPrimary
+                    accessLostText != null -> VpnRed
+                    organizationName != null -> VpnTextPrimary
+                    isActive -> VpnTextPrimary
+                    else -> VpnRed
                 }
             )
+
+            if (organizationName == null && accessLostText == null) {
+                ProfileDivider()
+
+                val daysRemaining = currentUser?.daysRemaining ?: 0
+                ProfileInfoRow(
+                    icon = Icons.Default.CalendarMonth,
+                    iconTint = VpnGreen,
+                    label = "Days Remaining",
+                    value = if (isActive) "$daysRemaining days" else "Expired",
+                    valueColor = when {
+                        !isActive -> VpnRed
+                        daysRemaining <= 7 -> VpnYellow
+                        else -> VpnTextPrimary
+                    }
+                )
+            }
         }
 
         Spacer(modifier = Modifier.height(32.dp))
@@ -277,8 +300,13 @@ fun ProfileScreen(
         ) {
             OutlinedButton(
                 onClick = {
-                    val intent = Intent(Intent.ACTION_VIEW, Uri.parse(Config.dashboardURL))
-                    context.startActivity(intent)
+                    viewModel.openDashboard { url ->
+                        try {
+                            context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)))
+                        } catch (e: Exception) {
+                            android.util.Log.e("ProfileScreen", "Failed to open dashboard", e)
+                        }
+                    }
                 },
                 modifier = Modifier
                     .fillMaxWidth()
@@ -347,7 +375,18 @@ fun ProfileScreen(
 
             Spacer(modifier = Modifier.height(12.dp))
 
-            OutlinedButton(
+            // Hidden for organization members: only an admin removes them.
+            if (currentUser?.isOrganizationMember == true) {
+                Text(
+                    text = "Your account is managed by your organization. Contact your administrator to remove it.",
+                    fontSize = 12.sp,
+                    color = VpnTextSecondary,
+                    textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 8.dp, vertical = 4.dp)
+                )
+            } else OutlinedButton(
                 onClick = {
                     if (connectionState == ConnectionState.DISCONNECTED) {
                         showDeleteDialog = true

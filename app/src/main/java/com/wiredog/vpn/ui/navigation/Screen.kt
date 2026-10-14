@@ -54,6 +54,8 @@ sealed class Screen(
     data object StandardAccount : Screen("standard_account", "Standard Account")
     data object AnonymousAccount : Screen("anonymous_account", "Anonymous Account")
     data object ForgotPassword : Screen("forgot_password", "Forgot Password")
+    data object TwoFactor : Screen("two_factor", "Two-Factor Authentication")
+    data object SsoLogin : Screen("sso_login", "Sign in with SSO")
 
     data object LogViewer : Screen("log_viewer/{logType}", "Log Viewer") {
         fun createRoute(logType: String) = "log_viewer/$logType"

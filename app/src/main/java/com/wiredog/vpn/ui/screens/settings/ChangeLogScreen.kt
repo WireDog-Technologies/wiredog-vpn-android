@@ -38,6 +38,15 @@ data class ChangeLogEntry(
 
 private val changeLog = listOf(
     ChangeLogEntry(
+        version = "1.4.0",
+        date = "October 2026",
+        changes = listOf(
+            "WireDog Business support: SSO sign-in, two-factor authentication, and organization Dedicated IPs.",
+            "Manage Account now opens your account dashboard already signed in.",
+            "Fixed server latency appearing higher than it really is while connected."
+        )
+    ),
+    ChangeLogEntry(
         version = "1.3.0",
         date = "September 2026",
         changes = listOf(

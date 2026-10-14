@@ -9,6 +9,7 @@ import com.wiredog.vpn.data.local.preferences.ReviewPromptPreferences
 import com.wiredog.vpn.data.local.preferences.SettingsPreferences
 import com.wiredog.vpn.data.logging.LogLevel
 import com.wiredog.vpn.data.logging.LogService
+import com.wiredog.vpn.data.repository.AuthRepository
 import com.wiredog.vpn.data.repository.ServerRepository
 import com.wiredog.vpn.data.repository.VpnRepository
 import com.wiredog.vpn.domain.model.ConnectionState
@@ -27,9 +28,13 @@ import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -43,6 +48,7 @@ class VpnConnectionManager @Inject constructor(
     @ApplicationContext private val context: Context,
     private val vpnRepository: VpnRepository,
     private val serverRepository: ServerRepository,
+    private val authRepository: AuthRepository,
     private val settingsPreferences: SettingsPreferences,
     private val reviewPromptPreferences: ReviewPromptPreferences,
     private val logService: LogService
@@ -67,6 +73,35 @@ class VpnConnectionManager @Inject constructor(
 
     init {
         scope.launch { runStartupCleanup() }
+        scope.launch { observeEntitlement() }
+    }
+
+    // Emitted when a live tunnel was torn down because a personal plan lapsed, so the UI can show
+    // the paywall. (An organization that stopped covering the account is reported through
+    // connectionError instead — a personal plan would not fix that.)
+    private val _subscriptionLapsed = MutableSharedFlow<Unit>(extraBufferCapacity = 1)
+    val subscriptionLapsed: SharedFlow<Unit> = _subscriptionLapsed.asSharedFlow()
+
+    /**
+     * A tunnel that is already up outlives the connect-time subscription check, so every profile
+     * refresh (foreground, post-purchase, etc.) re-checks entitlement and tears the tunnel down if
+     * it has lapsed. disconnect() sets the user-disconnect flag, so nothing auto-reconnects.
+     */
+    private suspend fun observeEntitlement() {
+        authRepository.currentUser.filterNotNull().collect { user ->
+            if (user.hasEntitlement) return@collect
+            if (_connectionState.value == ConnectionState.DISCONNECTED && !_isReconnecting.value) return@collect
+            if (_connectionState.value == ConnectionState.DISCONNECTING) return@collect
+
+            logService.logService("Subscription no longer active — disconnecting tunnel", LogLevel.WARNING)
+            val lost = user.lostOrganizationAccess
+            if (lost != null) {
+                _connectionError.value = lost.userMessage
+            } else {
+                _subscriptionLapsed.tryEmit(Unit)
+            }
+            disconnect()
+        }
     }
 
     private suspend fun runStartupCleanup() {
@@ -199,7 +234,7 @@ class VpnConnectionManager @Inject constructor(
                 // itself NonCancellable so the sessionId is always captured even if we were
                 // cancelled mid-request — the ensureActive() below then routes that cancel to
                 // the cleanup handler, which releases the just-created session.
-                val result = vpnRepository.connect(server.id, blockAds, blockMalware)
+                val result = vpnRepository.connect(server.connectServerId, blockAds, blockMalware, server.gatewayId)
                 val response = result.getOrElse { e ->
                     if (e is CancellationException) throw e
                     if (BuildConfig.DEBUG) Log.e(TAG, "API connect failed", e)
@@ -427,7 +462,7 @@ class VpnConnectionManager @Inject constructor(
                     val blockMalware = settingsPreferences.blockMalwareEnabled.first()
                     val splitTunneling = readSplitTunnelingSettings()
 
-                    val result = vpnRepository.connect(server.id, blockAds, blockMalware)
+                    val result = vpnRepository.connect(server.connectServerId, blockAds, blockMalware, server.gatewayId)
                     val response = result.getOrNull()
                     if (response == null) {
                         if (BuildConfig.DEBUG) Log.w(TAG, "Reconnect API failed", result.exceptionOrNull())

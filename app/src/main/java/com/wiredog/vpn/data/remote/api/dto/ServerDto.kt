@@ -15,11 +15,16 @@ data class ServerDto(
     @Json(name = "isRecommended") val isRecommended: Boolean = false,
     @Json(name = "latency") val latency: Int = 0,
     @Json(name = "load") val load: Int = 0,
-    @Json(name = "host") val host: String = ""
+    @Json(name = "host") val host: String = "",
+    // Set only on an organization member's gateway entry (named Dedicated IP). `id` is still
+    // the node's real server id; gatewayId is passed back when connecting.
+    @Json(name = "gatewayId") val gatewayId: Int? = null,
+    @Json(name = "gatewayName") val gatewayName: String? = null
 ) {
     fun toDomain(isFavorite: Boolean = false): Server {
         return Server(
-            id = id,
+            // A gateway shares its node's real id, so give it a unique list id.
+            id = gatewayId?.let { "${this.id}_gw$it" } ?: id,
             state = state,
             stateCode = stateCode,
             city = city,
@@ -29,7 +34,10 @@ data class ServerDto(
             latency = latency,
             load = load,
             isFavorite = isFavorite,
-            host = host
+            host = host,
+            gatewayId = gatewayId,
+            gatewayName = gatewayName,
+            apiServerId = if (gatewayId == null) null else id
         )
     }
 }

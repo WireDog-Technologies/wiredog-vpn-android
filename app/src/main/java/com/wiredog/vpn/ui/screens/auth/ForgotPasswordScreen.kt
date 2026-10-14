@@ -198,6 +198,30 @@ private fun ResetPasswordStep(uiState: ForgotPasswordUiState, viewModel: ForgotP
         imeAction = ImeAction.Done
     )
 
+    if (uiState.twoFactorRequired) {
+        Spacer(modifier = Modifier.height(16.dp))
+
+        OutlinedTextField(
+            value = uiState.twoFactorCode,
+            onValueChange = viewModel::onTwoFactorCodeChange,
+            label = { Text("Two-Factor Code") },
+            placeholder = { Text("Authenticator or recovery code", color = VpnTextSecondary) },
+            modifier = Modifier.fillMaxWidth(),
+            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
+            singleLine = true,
+            colors = textFieldColors()
+        )
+
+        Spacer(modifier = Modifier.height(8.dp))
+
+        Text(
+            text = "Your account has two-factor authentication on. Enter a code from your authenticator app, or a recovery code.",
+            fontSize = 12.sp,
+            color = VpnTextSecondary,
+            lineHeight = 17.sp
+        )
+    }
+
     uiState.error?.let { ErrorText(it) }
 
     Spacer(modifier = Modifier.height(24.dp))
@@ -205,7 +229,8 @@ private fun ResetPasswordStep(uiState: ForgotPasswordUiState, viewModel: ForgotP
     GradientActionButton(
         title = "Reset Password",
         isLoading = uiState.isLoading,
-        isDisabled = uiState.newPassword.isBlank() || uiState.confirmPassword.isBlank(),
+        isDisabled = uiState.newPassword.isBlank() || uiState.confirmPassword.isBlank() ||
+            (uiState.twoFactorRequired && uiState.twoFactorCode.isBlank()),
         onClick = viewModel::submitNewPassword
     )
 }

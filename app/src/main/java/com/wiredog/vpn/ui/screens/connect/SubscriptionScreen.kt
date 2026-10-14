@@ -210,6 +210,7 @@ fun SubscriptionScreen(
                 // See All Plans button
                 Button(
                     onClick = {
+                        viewModel.onAllPlansTapped()
                         try {
                             if (Config.pricingURL.isNotEmpty()) {
                                 val intent = Intent(Intent.ACTION_VIEW, Uri.parse(Config.pricingURL))

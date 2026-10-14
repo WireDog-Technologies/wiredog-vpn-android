@@ -2,6 +2,8 @@ package com.wiredog.vpn.ui.navigation
 
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.remember
+import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.compose.ui.Modifier
 import androidx.navigation.NavHostController
 import androidx.navigation.compose.NavHost
@@ -10,7 +12,9 @@ import com.wiredog.vpn.ui.screens.auth.AnonymousAccountScreen
 import com.wiredog.vpn.ui.screens.auth.CreateAccountScreen
 import com.wiredog.vpn.ui.screens.auth.ForgotPasswordScreen
 import com.wiredog.vpn.ui.screens.auth.LoginScreen
+import com.wiredog.vpn.ui.screens.auth.SsoLoginScreen
 import com.wiredog.vpn.ui.screens.auth.StandardAccountScreen
+import com.wiredog.vpn.ui.screens.auth.TwoFactorCodeScreen
 import com.wiredog.vpn.ui.screens.connect.ConnectScreen
 import com.wiredog.vpn.ui.screens.servers.ServersScreen
 import androidx.navigation.NavType
@@ -61,7 +65,31 @@ fun WireDogNavHost(
                 },
                 onNavigateToForgotPassword = {
                     navController.navigate(Screen.ForgotPassword.route)
+                },
+                onNavigateToTwoFactor = {
+                    navController.navigate(Screen.TwoFactor.route)
+                },
+                onNavigateToSso = {
+                    navController.navigate(Screen.SsoLogin.route)
                 }
+            )
+        }
+
+        composable(Screen.SsoLogin.route) { entry ->
+            // Same ViewModel as the login screen underneath: it carries the typed email and the
+            // in-flight SSO state.
+            val loginEntry = remember(entry) { navController.getBackStackEntry(Screen.Login.route) }
+            SsoLoginScreen(
+                onNavigateBack = { navController.popBackStack() },
+                onLoginSuccess = onLoginSuccess,
+                viewModel = hiltViewModel(loginEntry)
+            )
+        }
+
+        composable(Screen.TwoFactor.route) {
+            TwoFactorCodeScreen(
+                onNavigateBack = { navController.popBackStack() },
+                onLoginSuccess = onLoginSuccess
             )
         }
 

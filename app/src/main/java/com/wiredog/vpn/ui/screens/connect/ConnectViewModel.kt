@@ -5,6 +5,8 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.wiredog.vpn.data.local.preferences.SettingsPreferences
 import com.wiredog.vpn.data.remote.IpService
+import com.wiredog.vpn.data.repository.Milestone
+import com.wiredog.vpn.data.repository.MilestoneService
 import com.wiredog.vpn.data.repository.AnnouncementRepository
 import com.wiredog.vpn.data.repository.AuthRepository
 import com.wiredog.vpn.data.repository.ServerRepository
@@ -23,6 +25,8 @@ import kotlin.random.Random
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.filterNotNull
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
@@ -42,7 +46,10 @@ data class ConnectUiState(
     val splitTunnelingEnabled: Boolean = false,
     val needsSubscription: Boolean = false,
     val pendingServer: Server? = null,
-    val showReviewPrompt: Boolean = false
+    val showReviewPrompt: Boolean = false,
+    // Unpaid accounts see an upgrade card where the connection timer would be, so the paywall
+    // stays reachable after they dismiss it.
+    val showUpgradeCard: Boolean = false
 )
 
 /**
@@ -61,7 +68,8 @@ class ConnectViewModel @Inject constructor(
     private val vpnConnectionManager: VpnConnectionManager,
     private val authRepository: AuthRepository,
     private val settingsPreferences: SettingsPreferences,
-    private val announcementRepository: AnnouncementRepository
+    private val announcementRepository: AnnouncementRepository,
+    private val milestoneService: MilestoneService
 ) : ViewModel() {
 
     val announcements: StateFlow<List<Announcement>> = announcementRepository.messages
@@ -90,7 +98,11 @@ class ConnectViewModel @Inject constructor(
                 location = ipService.cachedLocation
             )
         }
-        fetchIpThenGeoLocation()
+        // If the ViewModel is recreated while the tunnel is still up (activity recreated, app
+        // reopened from recents), an ipify lookup would go out through the tunnel: it would hand
+        // the exit IP to a third party and record it as the real ("My IP") address. The
+        // CONNECTED branch of observeConnectionState() fills the exit IP from the backend instead.
+        if (isDisconnected()) fetchIpThenGeoLocation()
         observeConnectionState()
         observeConnectionError()
         observeReviewPrompt()
@@ -98,6 +110,8 @@ class ConnectViewModel @Inject constructor(
         observeReconnecting()
         observeSwitchingServer()
         observeSplitTunneling()
+        observeSubscriptionLapsed()
+        observeEntitlementUi()
         restoreLastServer()
         startLatencyPolling()
     }
@@ -117,14 +131,17 @@ class ConnectViewModel @Inject constructor(
                 // through the tunnel (you -> exit node -> target), so non-current servers read
                 // inflated by ~your RTT to the exit. Freeze on the last disconnected values
                 // instead; observeConnectionState() re-measures on the next disconnect.
-                if (vpnConnectionManager.connectionState.value == ConnectionState.DISCONNECTED) {
-                    serverRepository.measureAndUpdateLatencies()
+                if (isDisconnected()) {
+                    serverRepository.measureAndUpdateLatencies(::isDisconnected)
                 }
                 val jitter = Random.nextLong(-10_000L, 10_000L)
                 delay(60_000L + jitter)
             }
         }
     }
+
+    private fun isDisconnected() =
+        vpnConnectionManager.connectionState.value == ConnectionState.DISCONNECTED
 
     private fun stopLatencyPolling() {
         latencyPollingJob?.cancel()
@@ -150,7 +167,9 @@ class ConnectViewModel @Inject constructor(
                     _uiState.update {
                         it.copy(
                             publicIp = vpnIp,
-                            location = if (server != null) "${server.city}, ${ipService.abbreviateState(server.state)}" else it.location,
+                            location = if (server != null) {
+                                server.gatewayName ?: "${server.city}, ${ipService.abbreviateState(server.state)}"
+                            } else it.location,
                             isLoadingIp = false
                         )
                     }
@@ -171,7 +190,7 @@ class ConnectViewModel @Inject constructor(
                     fetchIpWithRetryThenGeoLocation()
                     // Latency probing was frozen while connected (would have measured through
                     // the tunnel) — refresh now that we're back on the direct path.
-                    viewModelScope.launch { serverRepository.measureAndUpdateLatencies() }
+                    viewModelScope.launch { serverRepository.measureAndUpdateLatencies(::isDisconnected) }
                 }
             }
         }
@@ -219,6 +238,47 @@ class ConnectViewModel @Inject constructor(
         viewModelScope.launch {
             vpnConnectionManager.isReconnecting.collect { reconnecting ->
                 _uiState.update { it.copy(isReconnecting = reconnecting) }
+            }
+        }
+    }
+
+    /**
+     * Unpaid accounts get the upgrade card, and the paywall once as soon as they are in the app
+     * (rather than discovering it on their first Connect tap). Neither applies when an
+     * organization used to cover the account: that gets its own message on connect, and a
+     * personal plan would not fix it.
+     */
+    private fun observeEntitlementUi() {
+        viewModelScope.launch {
+            authRepository.currentUser.collect { user ->
+                val unpaid = user != null && !user.hasEntitlement && user.lostOrganizationAccess == null
+                _uiState.update { it.copy(showUpgradeCard = unpaid) }
+            }
+        }
+        viewModelScope.launch {
+            // Once per ViewModel lifetime (i.e. per launch or login), so dismissing the paywall
+            // does not bring it straight back.
+            val userId = authRepository.currentUser.filterNotNull().first().id
+            // Refetch first so a cached, stale "inactive" profile (e.g. just subscribed on the
+            // website) does not trigger it.
+            authRepository.fetchProfile()
+            val user = authRepository.currentUser.value ?: return@launch
+            if (user.id == userId && !user.hasEntitlement && user.lostOrganizationAccess == null) {
+                _uiState.update { it.copy(needsSubscription = true, pendingServer = null) }
+            }
+        }
+    }
+
+    /** The upgrade card was tapped. */
+    fun presentPaywall() {
+        _uiState.update { it.copy(needsSubscription = true, pendingServer = null) }
+    }
+
+    // A live tunnel was torn down because the personal plan lapsed: surface the paywall.
+    private fun observeSubscriptionLapsed() {
+        viewModelScope.launch {
+            vpnConnectionManager.subscriptionLapsed.collect {
+                _uiState.update { it.copy(needsSubscription = true, pendingServer = null) }
             }
         }
     }
@@ -340,8 +400,19 @@ class ConnectViewModel @Inject constructor(
                         authRepository.resetConnections()
                         authRepository.fetchProfile()
                         val user = authRepository.currentUser.value
-                        if (user != null && !user.isSubscriptionActive) {
-                            _uiState.update { it.copy(needsSubscription = true, pendingServer = server) }
+                        if (user != null && !user.hasEntitlement) {
+                            val lost = user.lostOrganizationAccess
+                            if (lost != null) {
+                                // An organization used to cover this account and no longer does:
+                                // say so, rather than a personal paywall that would not fix an
+                                // employer-side problem.
+                                _uiState.update { it.copy(error = lost.userMessage) }
+                            } else {
+                                // Every manual connect path ends here for an unpaid account:
+                                // "tried to connect, got the paywall".
+                                milestoneService.record(Milestone.CONNECT_ATTEMPTED)
+                                _uiState.update { it.copy(needsSubscription = true, pendingServer = server) }
+                            }
                         } else {
                             connect(server)
                         }
